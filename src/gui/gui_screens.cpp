@@ -3,6 +3,7 @@
  * @brief Screen builders (build_splash, build_menu, …)
  */
 #include "gui_internal.h"
+#include "demos/benchmark/lv_demo_benchmark.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Splash
@@ -23,7 +24,7 @@ void build_splash() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Main menu
+//  Main menu  — navigation-style buttons
 // ════════════════════════════════════════════════════════════════════
 void build_menu() {
     scr_menu = mk_scr();
@@ -31,34 +32,26 @@ void build_menu() {
 
     lv_obj_t *cont = mk_content(scr_menu, hh);
 
-    mk_btn(cont, LV_SYMBOL_UPLOAD     " Train",    BTN_W, BTN_H, cb_btn_train);
-
-    lv_obj_t *b2 = mk_btn(cont, LV_SYMBOL_EYE_OPEN  " Predict",  BTN_W, BTN_H, cb_btn_predict);
-    lv_obj_set_style_bg_color(b2, lv_color_make(0x00,0x77,0xAA), 0);
-
-    lv_obj_t *b3 = mk_btn(cont, LV_SYMBOL_SETTINGS   " Settings", BTN_W, BTN_H, cb_btn_settings);
-    lv_obj_set_style_bg_color(b3, lv_color_make(0x44,0x44,0x66), 0);
+    mk_nav_btn(cont, LV_SYMBOL_UPLOAD     " Train",    cb_btn_train);
+    // Hand emoji: LVGL built-in Montserrat fonts don't include emoji glyphs.
+    // Using LV_SYMBOL_EYE_OPEN as closest equivalent.
+    // To use an actual hand icon, add a custom font with the U+270B glyph.
+    mk_nav_btn(cont, LV_SYMBOL_EYE_OPEN   " Predict",  cb_btn_predict);
+    mk_nav_btn(cont, LV_SYMBOL_SETTINGS   " Settings", cb_btn_settings);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Predict sub-menu
+//  Predict sub-menu  — 2 buttons: Local & Web
 // ════════════════════════════════════════════════════════════════════
 void build_predict_menu() {
     scr_predict = mk_scr();
-    int hh = mk_header(scr_predict, SI_PRED, "Predict", cb_btn_back_menu);
+    int hh = mk_header(scr_predict, SI_PRED,
+                        LV_SYMBOL_EYE_OPEN "  Predict", cb_btn_back_menu);
 
     lv_obj_t *cont = mk_content(scr_predict, hh);
 
-    mk_btn(cont, LV_SYMBOL_EDIT    " Words",  BTN_W, BTN_H, cb_btn_words);
-
-    lv_obj_t *b2 = mk_btn(cont, LV_SYMBOL_VOLUME_MAX " Speech", BTN_W, BTN_H, cb_btn_speech);
-    lv_obj_set_style_bg_color(b2, lv_color_make(0x00,0x66,0xAA), 0);
-
-    lv_obj_t *b3 = mk_btn(cont, LV_SYMBOL_SHUFFLE " Both", BTN_W, BTN_H, cb_btn_both);
-    lv_obj_set_style_bg_color(b3, lv_color_make(0x55,0x55,0x99), 0);
-
-    lv_obj_t *b4 = mk_btn(cont, LV_SYMBOL_WIFI " Web",   BTN_W, BTN_H, cb_btn_web);
-    lv_obj_set_style_bg_color(b4, lv_color_make(0x00,0x99,0x55), 0);
+    mk_nav_btn(cont, LV_SYMBOL_HOME   " Local",  cb_btn_local);
+    mk_nav_btn(cont, LV_SYMBOL_WIFI   " Web",    cb_btn_web);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -88,69 +81,39 @@ void build_train() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Words
+//  Local  — unified local prediction with toggle options
 // ════════════════════════════════════════════════════════════════════
-void build_words() {
-    scr_words = mk_scr();
-    int hh = mk_header(scr_words, SI_WORDS, LV_SYMBOL_EDIT "  Words", cb_btn_back_predict);
-    int cy = hh + SEP_H;
+void build_local() {
+    scr_local = mk_scr();
+    int hh = mk_header(scr_local, SI_LOCAL,
+                        LV_SYMBOL_HOME "  Local", cb_btn_back_predict);
 
-    lbl_gesture_w = lv_label_create(scr_words);
-    lv_label_set_text(lbl_gesture_w, "---");
-    lv_obj_set_style_text_font(lbl_gesture_w, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_gesture_w, lv_color_make(0x00,0xFF,0xAA), 0);
-    lv_obj_set_style_text_align(lbl_gesture_w, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_gesture_w, SCR_W - 2*SIDE_PAD);
-    lv_obj_align(lbl_gesture_w, LV_ALIGN_TOP_MID, 0, cy + 6);
+    lv_obj_t *cont = mk_content(scr_local, hh);
 
-    create_bars(scr_words, bar_flex, bar_hall, cy + 46);
-}
+    // ── Gesture label (large, centred) ──
+    lbl_gesture = lv_label_create(cont);
+    lv_label_set_text(lbl_gesture, "---");
+    lv_obj_set_style_text_font(lbl_gesture, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(lbl_gesture, lv_color_make(0x00,0xFF,0xAA), 0);
+    lv_obj_set_style_text_align(lbl_gesture, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(lbl_gesture, BTN_W);
+    if (!cfg_local_words) lv_obj_add_flag(lbl_gesture, LV_OBJ_FLAG_HIDDEN);
 
-// ════════════════════════════════════════════════════════════════════
-//  Speech
-// ════════════════════════════════════════════════════════════════════
-void build_speech() {
-    scr_speech = mk_scr();
-    int hh = mk_header(scr_speech, SI_SPEECH, LV_SYMBOL_VOLUME_MAX "  Speech", cb_btn_back_predict);
-    (void)hh;
+    // ── Toggle options ──
+    mk_section(cont, "OPTIONS");
+    add_switch_row(cont, LV_SYMBOL_LIST,       "Show Sensors",  cfg_local_sensors, cb_local_sensors);
+    add_switch_row(cont, LV_SYMBOL_EDIT,       "Show Words",    cfg_local_words,   cb_local_words);
+    add_switch_row(cont, LV_SYMBOL_VOLUME_MAX, "Use Speech",    cfg_local_speech,  cb_local_speech);
 
-    lv_obj_t *ic = lv_label_create(scr_speech);
-    lv_label_set_text(ic, LV_SYMBOL_VOLUME_MAX);
-    lv_obj_set_style_text_font(ic, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(ic, lv_color_make(0x00,0xCC,0xFF), 0);
-    lv_obj_align(ic, LV_ALIGN_CENTER, 0, -36);
-
-    lv_obj_t *l = lv_label_create(scr_speech);
-    lv_label_set_text(l, "SPEECH MODE\nAudio output active");
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(l, tc->sub_text, 0);
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, 20);
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  Both  (Words + Speech)
-// ════════════════════════════════════════════════════════════════════
-void build_both() {
-    scr_both = mk_scr();
-    int hh = mk_header(scr_both, SI_BOTH, LV_SYMBOL_SHUFFLE "  Both", cb_btn_back_predict);
-    int cy = hh + SEP_H;
-
-    lbl_gesture_b = lv_label_create(scr_both);
-    lv_label_set_text(lbl_gesture_b, "---");
-    lv_obj_set_style_text_font(lbl_gesture_b, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_gesture_b, lv_color_make(0x00,0xFF,0xAA), 0);
-    lv_obj_set_style_text_align(lbl_gesture_b, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_gesture_b, SCR_W - 2*SIDE_PAD);
-    lv_obj_align(lbl_gesture_b, LV_ALIGN_TOP_MID, 0, cy + 6);
-
-    create_bars(scr_both, bar_flex_b, bar_hall_b, cy + 46);
-
-    lv_obj_t *spk = lv_label_create(scr_both);
-    lv_label_set_text(spk, LV_SYMBOL_VOLUME_MAX " Audio ON");
-    lv_obj_set_style_text_font(spk, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(spk, lv_color_make(0xFF,0xCC,0x00), 0);
-    lv_obj_align(spk, LV_ALIGN_BOTTOM_MID, 0, -10);
+    // ── Sensor bars container ──
+    bars_container = lv_obj_create(cont);
+    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10); // 10 rows × 20px + padding
+    lv_obj_set_style_bg_opa(bars_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bars_container, 0, 0);
+    lv_obj_set_style_pad_all(bars_container, 0, 0);
+    lv_obj_clear_flag(bars_container, LV_OBJ_FLAG_SCROLLABLE);
+    create_bars(bars_container, bar_flex, bar_hall, 0);
+    if (!cfg_local_sensors) lv_obj_add_flag(bars_container, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -180,7 +143,7 @@ void build_web() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Settings  (scrollable, with About section)
+//  Settings  (scrollable, with Theme + About section)
 // ════════════════════════════════════════════════════════════════════
 void build_settings() {
     scr_settings = mk_scr();
@@ -195,14 +158,15 @@ void build_settings() {
                                        50, 255, cfg_brightness,
                                        cb_slider_brightness, &lbl_brt_val);
 
-    // Dark / Light mode switch
-    sw_dark_mode = add_switch_row(cont, LV_SYMBOL_EYE_OPEN, "Dark Mode",
-                                  cfg_dark_mode, cb_dark_mode_switch);
-
     // FPS limit dropdown
     dd_fps = add_dropdown_row(cont, LV_SYMBOL_REFRESH, "Max FPS",
                               "30\n60", cfg_fps == 60 ? 1 : 0,
                               cb_fps_dropdown);
+
+    // -- Theme --
+    mk_section(cont, "THEME");
+    sw_dark_mode = add_switch_row(cont, LV_SYMBOL_EYE_OPEN, "Dark Mode",
+                                  cfg_dark_mode, cb_dark_mode_switch);
 
     // -- Audio --
     mk_section(cont, "AUDIO");
@@ -216,29 +180,9 @@ void build_settings() {
                                   1, 30, cfg_sleep_min,
                                   cb_slider_sleep, &lbl_slp_val);
 
-    // -- Component Tests --
+    // -- Diagnostics — nav button to Tests --
     mk_section(cont, "DIAGNOSTICS");
-    lv_obj_t *tp = lv_obj_create(cont);
-    lv_obj_set_size(tp, BTN_W, 76);
-    lv_obj_set_style_bg_color(tp, tc->diag_bg, 0);
-    lv_obj_set_style_bg_opa(tp, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(tp, 10, 0);
-    lv_obj_set_style_border_width(tp, 0, 0);
-    lv_obj_set_style_pad_all(tp, 8, 0);
-    lv_obj_clear_flag(tp, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *tp_lbl = lv_label_create(tp);
-    lv_label_set_text(tp_lbl, "Run hardware self-tests");
-    lv_obj_set_style_text_font(tp_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(tp_lbl, tc->diag_text, 0);
-    lv_obj_align(tp_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    lv_obj_t *bt = mk_btn(tp, LV_SYMBOL_CHARGE " COMPONENT TESTS",
-                           BTN_W - 20, 36, cb_btn_tests);
-    lv_obj_set_style_bg_color(bt, lv_color_make(0x99,0x55,0x00), 0);
-    lv_obj_set_style_text_font(lv_obj_get_child(bt, 0),
-                               &lv_font_montserrat_16, 0);
-    lv_obj_align(bt, LV_ALIGN_BOTTOM_MID, 0, 0);
+    mk_nav_btn(cont, LV_SYMBOL_CHARGE " Hardware Tests", cb_btn_tests);
 
     // -- About --
     mk_section(cont, "ABOUT");
@@ -262,7 +206,7 @@ void build_settings() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Tests  (menu → detail sub-windows)
+//  Tests  (menu — navigation-style buttons)
 // ════════════════════════════════════════════════════════════════════
 void build_test() {
     scr_test = mk_scr();
@@ -271,41 +215,21 @@ void build_test() {
 
     lv_obj_t *cont = mk_content(scr_test, hh);
 
-    lv_obj_t *t1 = mk_btn(cont, LV_SYMBOL_IMAGE          " OLED",    BTN_W, BTN_H, cb_test_oled);
-    lv_obj_set_style_bg_color(t1, lv_color_make(0x88,0x33,0xCC), 0);
-
-    lv_obj_t *t2 = mk_btn(cont, LV_SYMBOL_LOOP            " MPU",    BTN_W, BTN_H, cb_test_mpu);
-    lv_obj_set_style_bg_color(t2, lv_color_make(0x33,0x88,0xCC), 0);
-
-    lv_obj_t *t3 = mk_btn(cont, LV_SYMBOL_MINUS            " Flex",   BTN_W, BTN_H, cb_test_flex);
-    lv_obj_set_style_bg_color(t3, lv_color_make(0x00,0x88,0xAA), 0);
-
-    lv_obj_t *t4 = mk_btn(cont, LV_SYMBOL_GPS              " Hall",   BTN_W, BTN_H, cb_test_hall);
-    lv_obj_set_style_bg_color(t4, lv_color_make(0xCC,0x66,0x00), 0);
-
-    lv_obj_t *t5 = mk_btn(cont, LV_SYMBOL_BATTERY_FULL     " Battery",BTN_W, BTN_H, cb_test_battery);
-    lv_obj_set_style_bg_color(t5, lv_color_make(0x33,0x99,0x33), 0);
-
-    lv_obj_t *t6 = mk_btn(cont, LV_SYMBOL_VOLUME_MAX       " Speaker",BTN_W, BTN_H, cb_test_speaker);
-    lv_obj_set_style_bg_color(t6, lv_color_make(0xCC,0x33,0x55), 0);
+    mk_nav_btn(cont, LV_SYMBOL_IMAGE          " OLED",         cb_test_oled);
+    mk_nav_btn(cont, LV_SYMBOL_LOOP           " MPU6050",      cb_test_mpu);
+    mk_nav_btn(cont, LV_SYMBOL_MINUS          " Flex Sensor",  cb_test_flex);
+    mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Effect",  cb_test_hall);
+    mk_nav_btn(cont, LV_SYMBOL_BATTERY_FULL   " Battery",      cb_test_battery);
+    mk_nav_btn(cont, LV_SYMBOL_VOLUME_MAX     " Speaker",      cb_test_speaker);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Test detail  (individual test sub-window)
+//  Test detail  (individual test sub-window — dynamic title)
 // ════════════════════════════════════════════════════════════════════
-static const lv_color_t test_colors[] = {
-    LV_COLOR_MAKE(0x88,0x33,0xCC),
-    LV_COLOR_MAKE(0x33,0x88,0xCC),
-    LV_COLOR_MAKE(0x00,0xBB,0xEE),
-    LV_COLOR_MAKE(0xFF,0x88,0x00),
-    LV_COLOR_MAKE(0x33,0x99,0x33),
-    LV_COLOR_MAKE(0xCC,0x33,0x55)
-};
-
 void build_test_detail() {
     scr_test_detail = mk_scr();
     int hh = mk_header(scr_test_detail, SI_TEST_DETAIL,
-                        LV_SYMBOL_CHARGE "  Test", cb_btn_back_test_detail);
+                        "Test", cb_btn_back_test_detail, &lbl_test_title);
 
     lv_obj_t *cont = mk_content(scr_test_detail, hh);
 
@@ -317,7 +241,51 @@ void build_test_detail() {
     lv_obj_set_width(lbl_test_detail, BTN_W);
     lv_label_set_long_mode(lbl_test_detail, LV_LABEL_LONG_WRAP);
 
-    // Speaker volume control row (hidden by default)
+    // ── OLED brightness slider (hidden by default) ──
+    test_brt_row = lv_obj_create(cont);
+    lv_obj_set_size(test_brt_row, BTN_W, 64);
+    lv_obj_set_style_bg_color(test_brt_row, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(test_brt_row, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(test_brt_row, 10, 0);
+    lv_obj_set_style_border_width(test_brt_row, 0, 0);
+    lv_obj_set_style_pad_left(test_brt_row, 12, 0);
+    lv_obj_set_style_pad_right(test_brt_row, 12, 0);
+    lv_obj_set_style_pad_top(test_brt_row, 8, 0);
+    lv_obj_set_style_pad_bottom(test_brt_row, 10, 0);
+    lv_obj_clear_flag(test_brt_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *bl = lv_label_create(test_brt_row);
+    lv_label_set_text(bl, LV_SYMBOL_IMAGE " Brightness");
+    lv_obj_set_style_text_font(bl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(bl, tc->card_text, 0);
+    lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lbl_test_brt_val = lv_label_create(test_brt_row);
+    char bb[8]; snprintf(bb, sizeof(bb), "%d", cfg_brightness);
+    lv_label_set_text(lbl_test_brt_val, bb);
+    lv_obj_set_style_text_font(lbl_test_brt_val, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(lbl_test_brt_val, lv_color_make(0x88,0x33,0xCC), 0);
+    lv_obj_align(lbl_test_brt_val, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    slider_test_brt = lv_slider_create(test_brt_row);
+    lv_obj_set_size(slider_test_brt, BTN_W - 28, 8);
+    lv_obj_align(slider_test_brt, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_slider_set_range(slider_test_brt, 50, 255);
+    lv_slider_set_value(slider_test_brt, cfg_brightness, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider_test_brt, tc->slider_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider_test_brt, lv_color_make(0x88,0x33,0xCC), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider_test_brt, lv_color_make(0xAA,0x55,0xEE), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(slider_test_brt, 4, LV_PART_KNOB);
+    lv_obj_add_event_cb(slider_test_brt, cb_slider_test_brt, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // ── OLED benchmark button (hidden by default) ──
+    btn_benchmark = mk_btn(cont, LV_SYMBOL_PLAY " Run Benchmark", BTN_W, 44, cb_benchmark);
+    lv_obj_set_style_bg_color(btn_benchmark, lv_color_make(0x88,0x33,0xCC), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_benchmark, 0), &lv_font_montserrat_16, 0);
+    lv_obj_add_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
+
+    // ── Speaker volume control row (hidden by default) ──
     test_vol_row = lv_obj_create(cont);
     lv_obj_set_size(test_vol_row, BTN_W, 64);
     lv_obj_set_style_bg_color(test_vol_row, tc->card_bg, 0);
@@ -357,43 +325,61 @@ void build_test_detail() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  populate_test_detail — fill content based on test_active
+//  populate_test_detail — fill content based on test_active,
+//  update header title to match the button label
 // ════════════════════════════════════════════════════════════════════
 void populate_test_detail() {
     if (!lbl_test_detail) return;
     int t = test_active;
+
+    // Update header title to the test button name
+    if (lbl_test_title && t >= 0 && t < 6)
+        lv_label_set_text(lbl_test_title, test_names[t]);
+
+    // Hide all optional rows first
+    lv_obj_add_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
 
     switch (t) {
     case 0:
         lv_label_set_text(lbl_test_detail,
             "OLED Test\n\n"
             "Running color pattern...\n"
-            "Check display for artifacts.");
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[0], 0);
+            "Check display for artifacts.\n\n"
+            "Adjust brightness or run\n"
+            "the LVGL benchmark below.");
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x88,0x33,0xCC), 0);
+        // Show OLED-specific controls
+        lv_obj_clear_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
+        lv_slider_set_value(slider_test_brt, cfg_brightness, LV_ANIM_OFF);
+        char bv[8]; snprintf(bv, sizeof(bv), "%d", cfg_brightness);
+        lv_label_set_text(lbl_test_brt_val, bv);
+        lv_obj_clear_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
         break;
     case 1:
         lv_label_set_text(lbl_test_detail,
             "MPU6050 Test\n\n"
             "Reading IMU data...\n"
             "Waiting for sensor data.");
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[1], 0);
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x33,0x88,0xCC), 0);
         break;
     case 2:
         lv_label_set_text(lbl_test_detail,
             "Flex Sensor Test\n\n"
             "Reading channels...\n"
             "Bend each finger to test.");
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[2], 0);
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x00,0xBB,0xEE), 0);
         break;
     case 3:
         lv_label_set_text(lbl_test_detail,
             "Hall Effect Test\n\n"
             "Reading channels...\n"
             "Move magnets near sensors.");
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[3], 0);
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0xFF,0x88,0x00), 0);
         break;
     case 4: {
-        char buf[120];
+        char buf[160];
         snprintf(buf, sizeof(buf),
             "Battery Test\n\n"
             LV_SYMBOL_BATTERY_FULL " %d%%\n"
@@ -402,7 +388,7 @@ void populate_test_detail() {
             bat_pct_cache, bat_voltage_v,
             bat_pct_cache > 20 ? "OK" : "LOW");
         lv_label_set_text(lbl_test_detail, buf);
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[4], 0);
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x33,0x99,0x33), 0);
         break;
     }
     case 5:
@@ -410,20 +396,15 @@ void populate_test_detail() {
             "Speaker Test\n\n"
             "Playing tone...\n"
             "Adjust volume below.");
-        lv_obj_set_style_text_color(lbl_test_detail, test_colors[5], 0);
-        break;
-    default:
-        lv_label_set_text(lbl_test_detail, "Unknown test");
-        break;
-    }
-
-    // Show/hide speaker volume control
-    if (t == 5) {
+        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0xCC,0x33,0x55), 0);
+        // Show speaker volume control
         lv_obj_clear_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
         lv_slider_set_value(slider_test_vol, cfg_volume, LV_ANIM_OFF);
         char vb[8]; snprintf(vb, sizeof(vb), "%d", cfg_volume);
         lv_label_set_text(lbl_test_vol_val, vb);
-    } else {
-        lv_obj_add_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
+        break;
+    default:
+        lv_label_set_text(lbl_test_detail, "Unknown test");
+        break;
     }
 }

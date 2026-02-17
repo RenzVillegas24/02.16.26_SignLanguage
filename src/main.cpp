@@ -207,34 +207,16 @@ void loop() {
         }
         break;
 
-    case MODE_PREDICT_WORDS:
+    case MODE_PREDICT_LOCAL:
         classify_gesture();
         if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
-            gui_update(sensor_data);
-            gui_set_gesture(gesture_text);
+            if (gui_local_show_sensors())
+                gui_update(sensor_data);
+            if (gui_local_show_words())
+                gui_set_gesture(gesture_text);
         }
-        break;
-
-    case MODE_PREDICT_SPEECH:
-        classify_gesture();
-        // Play tone for detected gesture (simple demo)
-        if (!audio_is_playing()) {
-            if (strcmp(gesture_text, "FIST") == 0)
-                audio_play_tone(440, 300);
-            else if (strcmp(gesture_text, "OPEN HAND") == 0)
-                audio_play_tone(880, 300);
-        }
-        break;
-
-    case MODE_PREDICT_BOTH:
-        classify_gesture();
-        if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
-            last_display = now;
-            gui_update(sensor_data);
-            gui_set_gesture(gesture_text);
-        }
-        if (!audio_is_playing()) {
+        if (gui_local_use_speech() && !audio_is_playing()) {
             if (strcmp(gesture_text, "FIST") == 0)
                 audio_play_tone(440, 300);
             else if (strcmp(gesture_text, "OPEN HAND") == 0)

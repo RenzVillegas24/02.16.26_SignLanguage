@@ -31,11 +31,47 @@ lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  mk_nav_btn  — navigation-style button: text left, ">" right
+//  Uses card_bg/card_text from theme for seamless theme matching.
+// ════════════════════════════════════════════════════════════════════
+lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
+                      lv_event_cb_t cb) {
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, BTN_W, BTN_H);
+    lv_obj_set_style_bg_color(btn, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, BTN_RAD, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_pad_left(btn, 14, 0);
+    lv_obj_set_style_pad_right(btn, 14, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    // Pressed state
+    lv_obj_set_style_bg_color(btn, tc->slider_track, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+
+    // Left-aligned text (icon + label)
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl, tc->card_text, 0);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+
+    // Right-aligned ">"
+    lv_obj_t *arrow = lv_label_create(btn);
+    lv_label_set_text(arrow, ">");
+    lv_obj_set_style_text_font(arrow, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(arrow, tc->section_text, 0);
+    lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    return btn;
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  mk_header  — two-row header: status bar + nav bar + separator
 //  Returns total header height (status + nav + sep).
 // ════════════════════════════════════════════════════════════════════
 int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
-              lv_event_cb_t back_cb) {
+              lv_event_cb_t back_cb, lv_obj_t **title_out) {
 
     // ── Status bar ─────────────────────────────────────────────────
     lv_obj_t *stat = lv_obj_create(scr);
@@ -103,6 +139,9 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
         lv_obj_align(tt, LV_ALIGN_LEFT_MID, BACK_SZ + 2, 0);
     else
         lv_obj_align(tt, LV_ALIGN_LEFT_MID, 0, 0);
+
+    // Optionally return the title label pointer
+    if (title_out) *title_out = tt;
 
     // ── Separator ──────────────────────────────────────────────────
     lv_obj_t *sep = lv_obj_create(scr);

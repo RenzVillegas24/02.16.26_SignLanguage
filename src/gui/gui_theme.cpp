@@ -123,10 +123,8 @@ void apply_theme() {
     // Delete all screens
     del_scr(scr_menu);
     del_scr(scr_predict);
+    del_scr(scr_local);
     del_scr(scr_train);
-    del_scr(scr_words);
-    del_scr(scr_speech);
-    del_scr(scr_both);
     del_scr(scr_web);
     del_scr(scr_settings);
     del_scr(scr_test);
@@ -136,9 +134,7 @@ void apply_theme() {
     build_menu();
     build_predict_menu();
     build_train();
-    build_words();
-    build_speech();
-    build_both();
+    build_local();
     build_web();
     build_settings();
     build_test();

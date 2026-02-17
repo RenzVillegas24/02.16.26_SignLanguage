@@ -60,8 +60,8 @@ extern const ThemeColors *tc;      // points to active palette
 //  Screen-index enum  (used for bat/cpu label arrays)
 // ════════════════════════════════════════════════════════════════════
 enum ScrIdx {
-    SI_MENU = 0, SI_PRED, SI_TRAIN, SI_WORDS, SI_SPEECH,
-    SI_BOTH, SI_WEB, SI_SETTINGS, SI_TEST, SI_TEST_DETAIL,
+    SI_MENU = 0, SI_PRED, SI_LOCAL, SI_TRAIN,
+    SI_WEB, SI_SETTINGS, SI_TEST, SI_TEST_DETAIL,
     SI_COUNT
 };
 
@@ -71,10 +71,8 @@ enum ScrIdx {
 extern lv_obj_t *scr_splash;
 extern lv_obj_t *scr_menu;
 extern lv_obj_t *scr_predict;
+extern lv_obj_t *scr_local;
 extern lv_obj_t *scr_train;
-extern lv_obj_t *scr_words;
-extern lv_obj_t *scr_speech;
-extern lv_obj_t *scr_both;
 extern lv_obj_t *scr_web;
 extern lv_obj_t *scr_settings;
 extern lv_obj_t *scr_test;
@@ -83,17 +81,13 @@ extern lv_obj_t *scr_test_detail;
 // ════════════════════════════════════════════════════════════════════
 //  Widget pointers  (defined in gui_api.cpp)
 // ════════════════════════════════════════════════════════════════════
-// Gesture labels
-extern lv_obj_t *lbl_gesture_w;
-extern lv_obj_t *lbl_gesture_b;
+// Gesture label (Local screen)
+extern lv_obj_t *lbl_gesture;
 
-// Sensor bars — WORDS screen
+// Sensor bars — Local screen (inside bars_container)
 extern lv_obj_t *bar_flex[5];
 extern lv_obj_t *bar_hall[5];
-
-// Sensor bars — BOTH screen
-extern lv_obj_t *bar_flex_b[5];
-extern lv_obj_t *bar_hall_b[5];
+extern lv_obj_t *bars_container;      // hides/shows sensor bars on local screen
 
 // Settings sliders & value labels
 extern lv_obj_t *slider_brightness;
@@ -119,9 +113,14 @@ extern lv_obj_t *lbl_web_stat;
 
 // Test detail
 extern lv_obj_t *lbl_test_detail;
+extern lv_obj_t *lbl_test_title;       // dynamic header title for test detail
 extern lv_obj_t *test_vol_row;
 extern lv_obj_t *slider_test_vol;
 extern lv_obj_t *lbl_test_vol_val;
+extern lv_obj_t *test_brt_row;         // OLED test brightness row
+extern lv_obj_t *slider_test_brt;
+extern lv_obj_t *lbl_test_brt_val;
+extern lv_obj_t *btn_benchmark;        // OLED benchmark button
 
 // Per-screen battery & CPU labels
 extern lv_obj_t *bat_labels[SI_COUNT];
@@ -144,10 +143,18 @@ extern uint8_t  cfg_sleep_min;
 extern bool     cfg_dark_mode;
 extern uint8_t  cfg_fps;
 
+// Local screen toggle state
+extern bool     cfg_local_sensors;
+extern bool     cfg_local_words;
+extern bool     cfg_local_speech;
+
 extern float    bat_voltage_v;
 extern int      bat_pct_cache;
 extern AppMode  cur_gui_mode;
 extern int      test_active;
+
+// Test name table (icon + name) — used for test detail header
+extern const char *test_names[];
 
 // ════════════════════════════════════════════════════════════════════
 //  External callbacks  (defined in gui_api.cpp)
@@ -176,8 +183,11 @@ void save_settings();
 lv_obj_t *mk_scr();
 lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
                   int w, int h, lv_event_cb_t cb);
+lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
+                      lv_event_cb_t cb);
 int       mk_header(lv_obj_t *scr, ScrIdx idx,
-                     const char *title, lv_event_cb_t back_cb);
+                     const char *title, lv_event_cb_t back_cb,
+                     lv_obj_t **title_out = nullptr);
 lv_obj_t *mk_content(lv_obj_t *scr, int header_h);
 void      create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
                       int y_start);
@@ -201,9 +211,7 @@ void build_splash();
 void build_menu();
 void build_predict_menu();
 void build_train();
-void build_words();
-void build_speech();
-void build_both();
+void build_local();
 void build_web();
 void build_settings();
 void build_test();
@@ -220,9 +228,7 @@ void nav_to(lv_obj_t *scr, bool left);
 void cb_btn_train(lv_event_t *e);
 void cb_btn_predict(lv_event_t *e);
 void cb_btn_settings(lv_event_t *e);
-void cb_btn_words(lv_event_t *e);
-void cb_btn_speech(lv_event_t *e);
-void cb_btn_both(lv_event_t *e);
+void cb_btn_local(lv_event_t *e);
 void cb_btn_web(lv_event_t *e);
 void cb_btn_tests(lv_event_t *e);
 
@@ -238,10 +244,16 @@ void cb_slider_brightness(lv_event_t *e);
 void cb_slider_volume(lv_event_t *e);
 void cb_slider_sleep(lv_event_t *e);
 void cb_slider_test_vol(lv_event_t *e);
+void cb_slider_test_brt(lv_event_t *e);
 
 // Settings callbacks
 void cb_dark_mode_switch(lv_event_t *e);
 void cb_fps_dropdown(lv_event_t *e);
+
+// Local screen toggle callbacks
+void cb_local_sensors(lv_event_t *e);
+void cb_local_words(lv_event_t *e);
+void cb_local_speech(lv_event_t *e);
 
 // Test callbacks
 void cb_test_oled(lv_event_t *e);
@@ -250,3 +262,6 @@ void cb_test_flex(lv_event_t *e);
 void cb_test_hall(lv_event_t *e);
 void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
+
+// OLED benchmark callback
+void cb_benchmark(lv_event_t *e);

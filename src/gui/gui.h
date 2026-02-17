@@ -25,6 +25,11 @@ void gui_set_brightness(uint8_t brt);     // 0-255
 uint8_t gui_get_volume();
 uint8_t gui_get_brightness();
 
+// Local-mode flag getters
+bool gui_local_show_sensors();
+bool gui_local_show_words();
+bool gui_local_use_speech();
+
 // About / system info — update live data on the about panel
 void gui_update_about(const SystemInfoData &info);
 
