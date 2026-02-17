@@ -7,6 +7,9 @@
 #include <Arduino.h>
 #include "config.h"
 
+// Forward declaration
+struct SystemInfoData;
+
 void gui_init();                       // Create all screens, show splash → menu
 void gui_update(const SensorData &d);  // Feed latest sensor data into active screen
 void gui_set_mode(AppMode mode);       // Switch to a mode screen
@@ -21,6 +24,9 @@ void gui_set_volume(uint8_t vol);         // 0-100
 void gui_set_brightness(uint8_t brt);     // 0-255
 uint8_t gui_get_volume();
 uint8_t gui_get_brightness();
+
+// About / system info — update live data on the about panel
+void gui_update_about(const SystemInfoData &info);
 
 // Tests — update live data on test screen
 void gui_test_update(const SensorData &d);

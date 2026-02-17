@@ -96,6 +96,7 @@ void display_init() {
     // Full-screen double-buffer in PSRAM for maximum throughput
     // 280×456×2 bytes ≈ 250 KB per buffer — fits easily in 8 MB PSRAM
     size_t buf_px = LCD_WIDTH * LCD_HEIGHT;
+    
     lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
         sizeof(lv_color_t) * buf_px, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(

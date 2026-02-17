@@ -18,6 +18,7 @@
 #include "audio.h"
 #include "power.h"
 #include "web_server.h"
+#include "system_info.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  State
@@ -159,6 +160,11 @@ void setup() {
     power_init();
     Serial.println("[MAIN] Power ready");
 
+    // 6. System info
+    sysinfo_init();
+    sysinfo_print_summary();
+    Serial.println("[MAIN] SystemInfo ready");
+
     Serial.println("[MAIN] Setup complete — entering loop");
 }
 
@@ -283,5 +289,10 @@ void loop() {
         cpu_busy_us  = 0;
         cpu_window_us = 0;
         gui_set_cpu_usage(cpu_pct);
+
+        // Update system info & About panel
+        uint16_t lvgl_fps = 1000 / LV_DISP_DEF_REFR_PERIOD;  // approximate
+        sysinfo_update((uint8_t)cpu_pct, lvgl_fps);
+        gui_update_about(sysinfo_get());
     }
 }

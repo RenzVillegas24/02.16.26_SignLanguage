@@ -1185,7 +1185,7 @@
     #ifdef CONFIG_LV_FONT_DEFAULT
         #define LV_FONT_DEFAULT CONFIG_LV_FONT_DEFAULT
     #else
-        #define LV_FONT_DEFAULT &lv_font_montserrat_14
+        #define LV_FONT_DEFAULT &lv_font_montserrat_16
     #endif
 #endif
 
