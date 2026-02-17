@@ -1,11 +1,11 @@
 /*
  * @file gui/gui_helpers.cpp
- * @brief Reusable widget factory helpers (mk_scr, mk_btn, mk_header, …)
+ * @brief Reusable widget factory helpers + back-gesture helper
  */
 #include "gui_internal.h"
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_scr  — create a themed screen object
+//  mk_scr
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *mk_scr() {
     lv_obj_t *s = lv_obj_create(NULL);
@@ -14,7 +14,7 @@ lv_obj_t *mk_scr() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_btn  — standard rounded button with label
+//  mk_btn — accent-coloured action button
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
                   int w, int h, lv_event_cb_t cb) {
@@ -31,8 +31,7 @@ lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_nav_btn  — navigation-style button: text left, ">" right
-//  Uses card_bg/card_text from theme for seamless theme matching.
+//  mk_nav_btn — navigation card button (text left, ">" right)
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
                       lv_event_cb_t cb) {
@@ -45,18 +44,15 @@ lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
     lv_obj_set_style_pad_left(btn, 14, 0);
     lv_obj_set_style_pad_right(btn, 14, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
-    // Pressed state
     lv_obj_set_style_bg_color(btn, tc->slider_track, LV_STATE_PRESSED);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
 
-    // Left-aligned text (icon + label)
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(lbl, tc->card_text, 0);
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
-    // Right-aligned ">"
     lv_obj_t *arrow = lv_label_create(btn);
     lv_label_set_text(arrow, ">");
     lv_obj_set_style_text_font(arrow, &lv_font_montserrat_20, 0);
@@ -67,13 +63,12 @@ lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_header  — two-row header: status bar + nav bar + separator
-//  Returns total header height (status + nav + sep).
+//  mk_header — status bar + nav bar + separator
 // ════════════════════════════════════════════════════════════════════
 int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
               lv_event_cb_t back_cb, lv_obj_t **title_out) {
 
-    // ── Status bar ─────────────────────────────────────────────────
+    // ── Status bar ──
     lv_obj_t *stat = lv_obj_create(scr);
     lv_obj_set_size(stat, SCR_W, STAT_H);
     lv_obj_set_pos(stat, 0, 0);
@@ -84,7 +79,6 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
     lv_obj_set_style_pad_right(stat, SIDE_PAD, 0);
     lv_obj_clear_flag(stat, LV_OBJ_FLAG_SCROLLABLE);
 
-    // CPU label
     lv_obj_t *lc = lv_label_create(stat);
     lv_label_set_text(lc, "CPU 0%");
     lv_obj_set_style_text_font(lc, &lv_font_montserrat_16, 0);
@@ -92,7 +86,6 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
     lv_obj_align(lc, LV_ALIGN_LEFT_MID, 0, 0);
     cpu_labels[idx] = lc;
 
-    // Battery label
     lv_obj_t *lb = lv_label_create(stat);
     lv_label_set_text(lb, LV_SYMBOL_BATTERY_FULL " 100%");
     lv_obj_set_style_text_font(lb, &lv_font_montserrat_16, 0);
@@ -100,7 +93,7 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
     lv_obj_align(lb, LV_ALIGN_RIGHT_MID, 0, 0);
     bat_labels[idx] = lb;
 
-    // ── Navigation bar ─────────────────────────────────────────────
+    // ── Nav bar ──
     lv_obj_t *nav = lv_obj_create(scr);
     lv_obj_set_size(nav, SCR_W, NAV_H);
     lv_obj_set_pos(nav, 0, STAT_H);
@@ -111,12 +104,12 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
     lv_obj_set_style_pad_right(nav, SIDE_PAD, 0);
     lv_obj_clear_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Back button (optional — hidden on menu screen)
     if (back_cb) {
         lv_obj_t *bb = lv_btn_create(nav);
         lv_obj_set_size(bb, BACK_SZ, BACK_SZ);
         lv_obj_align(bb, LV_ALIGN_LEFT_MID, -4, 0);
-        lv_obj_set_style_bg_color(bb, tc->back_btn_bg, 0);
+        // Back button gets accent tint like header
+        lv_obj_set_style_bg_color(bb, lv_color_mix(accent_primary(), tc->back_btn_bg, 30), 0);
         lv_obj_set_style_bg_opa(bb, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(bb, 10, 0);
         lv_obj_set_style_border_width(bb, 0, 0);
@@ -130,7 +123,6 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
         lv_obj_center(ba);
     }
 
-    // Title
     lv_obj_t *tt = lv_label_create(nav);
     lv_label_set_text(tt, title);
     lv_obj_set_style_text_font(tt, &lv_font_montserrat_24, 0);
@@ -140,10 +132,9 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
     else
         lv_obj_align(tt, LV_ALIGN_LEFT_MID, 0, 0);
 
-    // Optionally return the title label pointer
     if (title_out) *title_out = tt;
 
-    // ── Separator ──────────────────────────────────────────────────
+    // ── Separator ──
     lv_obj_t *sep = lv_obj_create(scr);
     lv_obj_set_size(sep, SCR_W, SEP_H);
     lv_obj_set_pos(sep, 0, STAT_H + NAV_H);
@@ -156,7 +147,7 @@ int mk_header(lv_obj_t *scr, ScrIdx idx, const char *title,
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_content  — scrollable flex-column below the header
+//  mk_content — scrollable flex-column below the header
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *mk_content(lv_obj_t *scr, int header_h) {
     lv_obj_t *cont = lv_obj_create(scr);
@@ -176,7 +167,7 @@ lv_obj_t *mk_content(lv_obj_t *scr, int header_h) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  create_bars  — 5 flex + 5 hall sensor bars with labels
+//  create_bars — 5 flex + 5 hall sensor bars (accent-coloured indicator)
 // ════════════════════════════════════════════════════════════════════
 void create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
                  int y_start) {
@@ -202,7 +193,7 @@ void create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
         lv_bar_set_range(b, 0, 4095);
         lv_bar_set_value(b, 0, LV_ANIM_OFF);
         lv_obj_set_style_bg_color(b, tc->bar_bg, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(b, lv_color_make(0x00,0xCC,0xFF), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(b, accent_primary(), LV_PART_INDICATOR);
         out = b;
     };
 
@@ -213,7 +204,7 @@ void create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  add_slider_row  — icon + label + value + slider in a themed card
+//  add_slider_row — accent-coloured slider
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
                          const char *label, int32_t min_v, int32_t max_v,
@@ -244,7 +235,7 @@ lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
     snprintf(vbuf, sizeof(vbuf), "%d", (int)cur);
     lv_label_set_text(vl, vbuf);
     lv_obj_set_style_text_font(vl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(vl, lv_color_make(0x00,0xCC,0xFF), 0);
+    lv_obj_set_style_text_color(vl, accent_primary(), 0);
     lv_obj_align(vl, LV_ALIGN_TOP_RIGHT, 0, 0);
     *val_lbl_out = vl;
 
@@ -254,15 +245,15 @@ lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
     lv_slider_set_range(sl, min_v, max_v);
     lv_slider_set_value(sl, cur, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(sl, tc->slider_track, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sl, lv_color_make(0x00,0x99,0xDD), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(sl, lv_color_make(0x00,0xCC,0xFF), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(sl, accent_dark(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, accent_light(), LV_PART_KNOB);
     lv_obj_set_style_pad_all(sl, 4, LV_PART_KNOB);
     lv_obj_add_event_cb(sl, cb, LV_EVENT_VALUE_CHANGED, NULL);
     return sl;
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  mk_section  — section label (e.g. "DISPLAY", "AUDIO")
+//  mk_section
 // ════════════════════════════════════════════════════════════════════
 void mk_section(lv_obj_t *par, const char *txt) {
     lv_obj_t *l = lv_label_create(par);
@@ -273,7 +264,7 @@ void mk_section(lv_obj_t *par, const char *txt) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  add_switch_row  — icon + label + switch in a themed card
+//  add_switch_row — accent-coloured checked state
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *add_switch_row(lv_obj_t *par, const char *icon,
                          const char *label, bool initial,
@@ -302,7 +293,7 @@ lv_obj_t *add_switch_row(lv_obj_t *par, const char *icon,
     lv_obj_set_size(sw, 44, 22);
     lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_color(sw, tc->sw_bg, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sw, lv_color_make(0x00,0x99,0xDD),
+    lv_obj_set_style_bg_color(sw, accent_dark(),
                               LV_PART_INDICATOR | LV_STATE_CHECKED);
     if (initial) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -310,7 +301,7 @@ lv_obj_t *add_switch_row(lv_obj_t *par, const char *icon,
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  add_dropdown_row  — icon + label + dropdown in a themed card
+//  add_dropdown_row — accent-coloured text
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *add_dropdown_row(lv_obj_t *par, const char *icon,
                            const char *label, const char *options,
@@ -342,11 +333,10 @@ lv_obj_t *add_dropdown_row(lv_obj_t *par, const char *icon,
     lv_obj_align(dd, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_text_font(dd, &lv_font_montserrat_16, 0);
     lv_obj_set_style_bg_color(dd, tc->dd_bg, 0);
-    lv_obj_set_style_text_color(dd, lv_color_make(0x00,0xCC,0xFF), 0);
+    lv_obj_set_style_text_color(dd, accent_primary(), 0);
     lv_obj_set_style_border_width(dd, 0, 0);
     lv_obj_set_style_pad_ver(dd, 4, 0);
     lv_obj_set_style_pad_hor(dd, 8, 0);
-    // Style the dropdown list
     lv_obj_t *list = lv_dropdown_get_list(dd);
     if (list) {
         lv_obj_set_style_text_font(list, &lv_font_montserrat_16, 0);
@@ -355,4 +345,93 @@ lv_obj_t *add_dropdown_row(lv_obj_t *par, const char *icon,
     }
     lv_obj_add_event_cb(dd, cb, LV_EVENT_VALUE_CHANGED, NULL);
     return dd;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Back-gesture — timer-polled swipe detection (bypasses LVGL events)
+//
+//  The touch input is polled directly every 20 ms so no events can be
+//  swallowed by scroll-containers or child widgets.
+//
+//  Trigger rules:
+//   • Touch-down must start within the left 1/4 of the screen.
+//   • Finger must travel ≥ 1/4 screen-width to the right.
+//   • Gesture fires immediately when the threshold is crossed
+//     (while the finger is still down).
+// ════════════════════════════════════════════════════════════════════
+
+// Swipe threshold = 1/4 screen width
+static const lv_coord_t SWIPE_ZONE  = SCR_W / 4;   // start zone (left 70 px)
+static const lv_coord_t SWIPE_DIST  = SCR_W / 4;   // required travel distance
+
+// Per-screen back callback registry (max 10 screens)
+struct BackEntry { lv_obj_t *scr; lv_event_cb_t cb; };
+static BackEntry _back_reg[10];
+static int       _back_reg_n = 0;
+
+// Swipe runtime state
+static lv_coord_t  _sw_start_x   = -1;
+static bool        _sw_triggered  = false;
+static bool        _sw_was_down   = false;
+static lv_timer_t *_sw_timer      = nullptr;
+
+// Look up the back callback for the currently-active screen
+static lv_event_cb_t _find_back_cb() {
+    lv_obj_t *act = lv_scr_act();
+    for (int i = 0; i < _back_reg_n; i++) {
+        if (_back_reg[i].scr == act) return _back_reg[i].cb;
+    }
+    return nullptr;
+}
+
+// 20 ms poll timer — reads touch state directly from indev
+static void _swipe_poll_cb(lv_timer_t *t) {
+    (void)t;
+    lv_indev_t *indev = lv_indev_get_next(NULL);
+    if (!indev) return;
+
+    // lv_indev_get_point gives last known coords; state tells press/release
+    bool     down = (indev->proc.state == LV_INDEV_STATE_PRESSED);
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (down && !_sw_was_down) {
+        // ── Finger just touched down ──
+        _sw_start_x  = p.x;
+        _sw_triggered = false;
+    }
+    else if (down && _sw_was_down && !_sw_triggered) {
+        // ── Finger still held — check for swipe ──
+        if (_sw_start_x >= 0 && _sw_start_x <= SWIPE_ZONE) {
+            int32_t dx = p.x - _sw_start_x;
+            if (dx >= SWIPE_DIST) {
+                _sw_triggered = true;
+                lv_event_cb_t cb = _find_back_cb();
+                if (cb) {
+                    // Fire the back callback with a synthetic event
+                    lv_event_t ev;
+                    lv_memset_00(&ev, sizeof(ev));
+                    cb(&ev);
+                }
+            }
+        }
+    }
+    else if (!down && _sw_was_down) {
+        // ── Finger lifted ──
+        _sw_start_x   = -1;
+        _sw_triggered  = false;
+    }
+
+    _sw_was_down = down;
+}
+
+void add_back_gesture(lv_obj_t *scr, lv_event_cb_t back_cb) {
+    // Register this screen ↔ callback pair
+    if (_back_reg_n < 10) {
+        _back_reg[_back_reg_n++] = { scr, back_cb };
+    }
+    // Ensure the global poll timer is running (created once)
+    if (!_sw_timer) {
+        _sw_timer = lv_timer_create(_swipe_poll_cb, 20, NULL);
+    }
 }

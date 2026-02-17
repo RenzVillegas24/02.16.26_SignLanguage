@@ -1,8 +1,38 @@
 /*
  * @file gui/gui_theme.cpp
- * @brief Theme palettes, LVGL styles, init_styles(), apply_theme()
+ * @brief Theme palettes, accent colours, LVGL styles, init_styles(), apply_theme()
  */
 #include "gui_internal.h"
+
+// ════════════════════════════════════════════════════════════════════
+//  Accent colour presets
+// ════════════════════════════════════════════════════════════════════
+const AccentPreset ACCENTS[NUM_ACCENTS] = {
+    /* 0 Blue   */ {"Blue",    lv_color_make(0x00,0x88,0xFF), lv_color_make(0x00,0xCC,0xFF), lv_color_make(0x00,0x55,0x99)},
+    /* 1 Cyan   */ {"Cyan",    lv_color_make(0x00,0xBB,0xDD), lv_color_make(0x00,0xDD,0xFF), lv_color_make(0x00,0x88,0xAA)},
+    /* 2 Teal   */ {"Teal",    lv_color_make(0x00,0xCC,0x88), lv_color_make(0x33,0xFF,0xAA), lv_color_make(0x00,0x99,0x66)},
+    /* 3 Green  */ {"Green",   lv_color_make(0x44,0xBB,0x44), lv_color_make(0x66,0xDD,0x66), lv_color_make(0x33,0x88,0x33)},
+    /* 4 Purple */ {"Purple",  lv_color_make(0x88,0x44,0xDD), lv_color_make(0xAA,0x66,0xFF), lv_color_make(0x66,0x22,0xAA)},
+    /* 5 Pink   */ {"Pink",    lv_color_make(0xFF,0x44,0x88), lv_color_make(0xFF,0x66,0xAA), lv_color_make(0xCC,0x22,0x66)},
+    /* 6 Orange */ {"Orange",  lv_color_make(0xFF,0x88,0x00), lv_color_make(0xFF,0xAA,0x33), lv_color_make(0xCC,0x66,0x00)},
+    /* 7 Red    */ {"Red",     lv_color_make(0xFF,0x33,0x44), lv_color_make(0xFF,0x55,0x66), lv_color_make(0xCC,0x11,0x22)},
+    /* 8 Yellow */ {"Yellow",  lv_color_make(0xFF,0xCC,0x00), lv_color_make(0xFF,0xDD,0x44), lv_color_make(0xCC,0x99,0x00)},
+};
+
+lv_color_t accent_hdr_tint() {
+    // ~12 % accent blended into header bg
+    return lv_color_mix(accent_primary(), tc->hdr_bg, 30);
+}
+
+const char *accent_dropdown_opts() {
+    static char buf[128];
+    buf[0] = '\0';
+    for (int i = 0; i < NUM_ACCENTS; i++) {
+        if (i) strcat(buf, "\n");
+        strcat(buf, ACCENTS[i].name);
+    }
+    return buf;
+}
 
 // ════════════════════════════════════════════════════════════════════
 //  Dark palette
@@ -58,7 +88,6 @@ const ThemeColors TC_LIGHT = {
     /* sw_bg         */ lv_color_make(0xBB,0xBB,0xBB),
 };
 
-// Active palette pointer  (defaults to dark)
 const ThemeColors *tc = &TC_DARK;
 
 // ════════════════════════════════════════════════════════════════════
@@ -70,19 +99,17 @@ lv_style_t sty_btn_pr;
 lv_style_t sty_hdr;
 
 // ════════════════════════════════════════════════════════════════════
-//  init_styles — called once at boot
+//  init_styles — called once at boot (uses accent colours)
 // ════════════════════════════════════════════════════════════════════
 void init_styles() {
-    // Screen base
     lv_style_init(&sty_scr);
     lv_style_set_bg_color(&sty_scr, tc->scr_bg);
     lv_style_set_bg_opa(&sty_scr, LV_OPA_COVER);
     lv_style_set_text_color(&sty_scr, tc->scr_text);
     lv_style_set_text_font(&sty_scr, &lv_font_montserrat_20);
 
-    // Default button
     lv_style_init(&sty_btn);
-    lv_style_set_bg_color(&sty_btn, lv_color_make(0x00,0x55,0x88));
+    lv_style_set_bg_color(&sty_btn, accent_dark());
     lv_style_set_bg_opa(&sty_btn, LV_OPA_COVER);
     lv_style_set_radius(&sty_btn, BTN_RAD);
     lv_style_set_text_color(&sty_btn, lv_color_white());
@@ -90,32 +117,30 @@ void init_styles() {
     lv_style_set_pad_ver(&sty_btn, 12);
     lv_style_set_border_width(&sty_btn, 0);
 
-    // Button pressed
     lv_style_init(&sty_btn_pr);
-    lv_style_set_bg_color(&sty_btn_pr, lv_color_make(0x00,0x33,0x55));
+    lv_style_set_bg_color(&sty_btn_pr, lv_color_mix(accent_dark(), lv_color_black(), 160));
 
-    // Header bar
     lv_style_init(&sty_hdr);
-    lv_style_set_bg_color(&sty_hdr, tc->hdr_bg);
+    lv_style_set_bg_color(&sty_hdr, accent_hdr_tint());
     lv_style_set_bg_opa(&sty_hdr, LV_OPA_COVER);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  apply_theme — rebuild all screens with the current palette
-//
-//  Deferred via lv_timer so it never runs inside an LVGL event.
+//  apply_theme — rebuild all screens with the current palette + accent
 // ════════════════════════════════════════════════════════════════════
 static void del_scr(lv_obj_t *&s) { if (s) { lv_obj_del(s); s = nullptr; } }
 
 void apply_theme() {
     tc = cfg_dark_mode ? &TC_DARK : &TC_LIGHT;
 
-    // Update base styles
+    // Update base styles with current accent
     lv_style_set_bg_color(&sty_scr, tc->scr_bg);
     lv_style_set_text_color(&sty_scr, tc->scr_text);
-    lv_style_set_bg_color(&sty_hdr, tc->hdr_bg);
+    lv_style_set_bg_color(&sty_hdr, accent_hdr_tint());
+    lv_style_set_bg_color(&sty_btn, accent_dark());
+    lv_style_set_bg_color(&sty_btn_pr, lv_color_mix(accent_dark(), lv_color_black(), 160));
 
-    // Temporary blank screen so we can delete the old ones safely
+    // Temporary blank screen
     lv_obj_t *blank = lv_obj_create(NULL);
     lv_obj_add_style(blank, &sty_scr, 0);
     lv_scr_load(blank);
@@ -130,7 +155,7 @@ void apply_theme() {
     del_scr(scr_test);
     del_scr(scr_test_detail);
 
-    // Rebuild every screen with new palette
+    // Rebuild with new palette / accent
     build_menu();
     build_predict_menu();
     build_train();
@@ -140,10 +165,9 @@ void apply_theme() {
     build_test();
     build_test_detail();
 
-    // Return to the settings screen (where the toggle lives)
+    // Return to settings
     lv_scr_load(scr_settings);
     cur_gui_mode = MODE_SETTINGS;
 
-    // Clean up the temporary screen
     lv_obj_del(blank);
 }

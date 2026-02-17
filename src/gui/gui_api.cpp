@@ -1,6 +1,7 @@
 /*
  * @file gui/gui_api.cpp
  * @brief Public GUI API + global state + NVS persistence
+ *        Now includes cfg_accent, accent NVS, and emoji test_names[].
  */
 #include "gui_internal.h"
 #include "gui/gui.h"
@@ -23,11 +24,11 @@ lv_obj_t *scr_test_detail  = nullptr;
 // ════════════════════════════════════════════════════════════════════
 //  Widget pointers
 // ════════════════════════════════════════════════════════════════════
-lv_obj_t *lbl_gesture      = nullptr;   // local screen gesture label
+lv_obj_t *lbl_gesture      = nullptr;
 
-lv_obj_t *bar_flex[5]      = {};        // local screen sensor bars
+lv_obj_t *bar_flex[5]      = {};
 lv_obj_t *bar_hall[5]      = {};
-lv_obj_t *bars_container   = nullptr;   // hides/shows bars on local screen
+lv_obj_t *bars_container   = nullptr;
 
 lv_obj_t *slider_brightness= nullptr;
 lv_obj_t *slider_volume    = nullptr;
@@ -38,6 +39,7 @@ lv_obj_t *lbl_slp_val      = nullptr;
 
 lv_obj_t *sw_dark_mode     = nullptr;
 lv_obj_t *dd_fps           = nullptr;
+lv_obj_t *dd_accent        = nullptr;
 
 lv_obj_t *lbl_about        = nullptr;
 lv_obj_t *lbl_train_stat   = nullptr;
@@ -48,14 +50,14 @@ lv_obj_t *lbl_web_stat      = nullptr;
 bool      web_client_connected = false;
 
 lv_obj_t *lbl_test_detail  = nullptr;
-lv_obj_t *lbl_test_title   = nullptr;   // dynamic header title for test detail
+lv_obj_t *lbl_test_title   = nullptr;
 lv_obj_t *test_vol_row     = nullptr;
 lv_obj_t *slider_test_vol  = nullptr;
 lv_obj_t *lbl_test_vol_val = nullptr;
-lv_obj_t *test_brt_row     = nullptr;   // OLED test brightness row
+lv_obj_t *test_brt_row     = nullptr;
 lv_obj_t *slider_test_brt  = nullptr;
 lv_obj_t *lbl_test_brt_val = nullptr;
-lv_obj_t *btn_benchmark    = nullptr;   // OLED benchmark button
+lv_obj_t *btn_benchmark    = nullptr;
 
 lv_obj_t *bat_labels[SI_COUNT] = {};
 lv_obj_t *cpu_labels[SI_COUNT] = {};
@@ -68,8 +70,8 @@ uint8_t  cfg_brightness = 200;
 uint8_t  cfg_sleep_min  = 5;
 bool     cfg_dark_mode  = true;
 uint8_t  cfg_fps        = 30;
+uint8_t  cfg_accent     = 0;        // accent colour index (0..NUM_ACCENTS-1)
 
-// Local screen toggle state
 bool     cfg_local_sensors = false;
 bool     cfg_local_words   = true;
 bool     cfg_local_speech  = false;
@@ -79,9 +81,14 @@ int      bat_pct_cache  = 100;
 AppMode  cur_gui_mode   = MODE_MENU;
 int      test_active    = -1;
 
-// Test name table — used for dynamic header title in test detail
+// Test names with LVGL symbol prefixes (emoji icons)
 const char *test_names[] = {
-    "OLED", "MPU6050", "Flex Sensor", "Hall Effect", "Battery", "Speaker"
+    LV_SYMBOL_IMAGE        " OLED",
+    LV_SYMBOL_LOOP         " MPU6050",
+    LV_SYMBOL_MINUS        " Flex Sensor",
+    LV_SYMBOL_GPS          " Hall Effect",
+    LV_SYMBOL_BATTERY_FULL " Battery",
+    LV_SYMBOL_VOLUME_MAX   " Speaker"
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -104,6 +111,8 @@ void load_settings() {
     cfg_sleep_min  = prefs.getUChar("slp", 5);
     cfg_dark_mode  = prefs.getBool("dark", true);
     cfg_fps        = prefs.getUChar("fps", 30);
+    cfg_accent     = prefs.getUChar("acnt", 0);
+    if (cfg_accent >= NUM_ACCENTS) cfg_accent = 0;
     prefs.end();
 }
 
@@ -115,6 +124,7 @@ void save_settings() {
     prefs.putUChar("slp", cfg_sleep_min);
     prefs.putBool("dark", cfg_dark_mode);
     prefs.putUChar("fps", cfg_fps);
+    prefs.putUChar("acnt", cfg_accent);
     prefs.end();
 }
 
@@ -124,7 +134,6 @@ void save_settings() {
 void gui_init() {
     load_settings();
 
-    // Point to the correct palette before building anything
     tc = cfg_dark_mode ? &TC_DARK : &TC_LIGHT;
 
     init_styles();
@@ -250,7 +259,6 @@ void gui_set_battery(int pct) {
             lv_label_set_text(bat_labels[i], buf);
     }
 
-    // Update battery test detail if active
     if (cur_gui_mode == MODE_TEST && test_active == 4 && lbl_test_detail) {
         char vbuf[120];
         snprintf(vbuf, sizeof(vbuf),
@@ -274,7 +282,6 @@ void gui_web_set_connected(bool connected) {
     web_client_connected = connected;
 
     if (connected) {
-        // Client connected — show webpage QR, hide WiFi QR
         if (qr_wifi) lv_obj_add_flag(qr_wifi, LV_OBJ_FLAG_HIDDEN);
         if (qr_web)  lv_obj_clear_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
         if (lbl_web_stat)
@@ -283,7 +290,6 @@ void gui_web_set_connected(bool connected) {
                 "Scan to open webpage\n"
                 "http://192.168.4.1");
     } else {
-        // No clients — show WiFi QR, hide webpage QR
         if (qr_wifi) lv_obj_clear_flag(qr_wifi, LV_OBJ_FLAG_HIDDEN);
         if (qr_web)  lv_obj_add_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
         if (lbl_web_stat)
@@ -303,7 +309,6 @@ void gui_set_brightness(uint8_t brt)  { cfg_brightness = brt; }
 uint8_t gui_get_volume()              { return cfg_volume; }
 uint8_t gui_get_brightness()          { return cfg_brightness; }
 
-// Local flag getters
 bool gui_local_show_sensors()         { return cfg_local_sensors; }
 bool gui_local_show_words()           { return cfg_local_words; }
 bool gui_local_use_speech()           { return cfg_local_speech; }

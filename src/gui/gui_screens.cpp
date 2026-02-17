@@ -1,6 +1,7 @@
 /*
  * @file gui/gui_screens.cpp
  * @brief Screen builders (build_splash, build_menu, …)
+ *        Now with back-gesture support, accent colours, and emoji test titles.
  */
 #include "gui_internal.h"
 
@@ -18,7 +19,7 @@ void build_splash() {
     lv_obj_t *sub = lv_label_create(scr_splash);
     lv_label_set_text(sub, "Sign Language Translator");
     lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(sub, lv_color_make(0x00,0xCC,0xFF), 0);
+    lv_obj_set_style_text_color(sub, accent_primary(), 0);
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, 16);
 }
 
@@ -32,9 +33,6 @@ void build_menu() {
     lv_obj_t *cont = mk_content(scr_menu, hh);
 
     mk_nav_btn(cont, LV_SYMBOL_UPLOAD     " Train",    cb_btn_train);
-    // Hand emoji: LVGL built-in Montserrat fonts don't include emoji glyphs.
-    // Using LV_SYMBOL_EYE_OPEN as closest equivalent.
-    // To use an actual hand icon, add a custom font with the U+270B glyph.
     mk_nav_btn(cont, LV_SYMBOL_EYE_OPEN   " Predict",  cb_btn_predict);
     mk_nav_btn(cont, LV_SYMBOL_SETTINGS   " Settings", cb_btn_settings);
 }
@@ -51,6 +49,8 @@ void build_predict_menu() {
 
     mk_nav_btn(cont, LV_SYMBOL_HOME   " Local",  cb_btn_local);
     mk_nav_btn(cont, LV_SYMBOL_WIFI   " Web",    cb_btn_web);
+
+    add_back_gesture(scr_predict, cb_btn_back_menu);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -77,6 +77,8 @@ void build_train() {
     lv_label_set_text(lbl_train_stat, "Status: Streaming...");
     lv_obj_set_style_text_font(lbl_train_stat, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl_train_stat, lv_color_make(0x66,0xFF,0x66), 0);
+
+    add_back_gesture(scr_train, cb_btn_back_menu);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -106,13 +108,15 @@ void build_local() {
 
     // ── Sensor bars container ──
     bars_container = lv_obj_create(cont);
-    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10); // 10 rows × 20px + padding
+    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10);
     lv_obj_set_style_bg_opa(bars_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bars_container, 0, 0);
     lv_obj_set_style_pad_all(bars_container, 0, 0);
     lv_obj_clear_flag(bars_container, LV_OBJ_FLAG_SCROLLABLE);
     create_bars(bars_container, bar_flex, bar_hall, 0);
     if (!cfg_local_sensors) lv_obj_add_flag(bars_container, LV_OBJ_FLAG_HIDDEN);
+
+    add_back_gesture(scr_local, cb_btn_back_predict);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -139,7 +143,6 @@ void build_web() {
     qr_wifi = lv_qrcode_create(scr_web, 140,
                                 lv_color_white(), lv_color_black());
     lv_obj_align(qr_wifi, LV_ALIGN_CENTER, 0, 10);
-    // Standard WiFi QR format
     char wifi_qr_data[128];
     snprintf(wifi_qr_data, sizeof(wifi_qr_data),
         "WIFI:T:WPA;S:%s;P:%s;;", WIFI_AP_SSID, WIFI_AP_PASS);
@@ -158,10 +161,12 @@ void build_web() {
     lv_obj_add_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
 
     web_client_connected = false;
+
+    add_back_gesture(scr_web, cb_btn_back_predict);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Settings  (scrollable, with Theme + About section)
+//  Settings  (scrollable, with Theme + Accent + About section)
 // ════════════════════════════════════════════════════════════════════
 void build_settings() {
     scr_settings = mk_scr();
@@ -176,7 +181,6 @@ void build_settings() {
                                        50, 255, cfg_brightness,
                                        cb_slider_brightness, &lbl_brt_val);
 
-    // FPS limit dropdown
     dd_fps = add_dropdown_row(cont, LV_SYMBOL_REFRESH, "Max FPS",
                               "30\n60", cfg_fps == 60 ? 1 : 0,
                               cb_fps_dropdown);
@@ -185,6 +189,10 @@ void build_settings() {
     mk_section(cont, "THEME");
     sw_dark_mode = add_switch_row(cont, LV_SYMBOL_EYE_OPEN, "Dark Mode",
                                   cfg_dark_mode, cb_dark_mode_switch);
+
+    dd_accent = add_dropdown_row(cont, LV_SYMBOL_TINT, "Accent Color",
+                                 accent_dropdown_opts(), cfg_accent,
+                                 cb_accent_dropdown);
 
     // -- Audio --
     mk_section(cont, "AUDIO");
@@ -221,10 +229,12 @@ void build_settings() {
     lv_obj_set_style_text_color(lbl_about, tc->about_text, 0);
     lv_obj_set_width(lbl_about, BTN_W - 24);
     lv_label_set_long_mode(lbl_about, LV_LABEL_LONG_WRAP);
+
+    add_back_gesture(scr_settings, cb_btn_back_menu);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Tests  (menu — navigation-style buttons)
+//  Tests  (menu — navigation-style buttons with emoji)
 // ════════════════════════════════════════════════════════════════════
 void build_test() {
     scr_test = mk_scr();
@@ -239,10 +249,13 @@ void build_test() {
     mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Effect",  cb_test_hall);
     mk_nav_btn(cont, LV_SYMBOL_BATTERY_FULL   " Battery",      cb_test_battery);
     mk_nav_btn(cont, LV_SYMBOL_VOLUME_MAX     " Speaker",      cb_test_speaker);
+
+    add_back_gesture(scr_test, cb_btn_back_tests);
 }
 
 // ════════════════════════════════════════════════════════════════════
 //  Test detail  (individual test sub-window — dynamic title)
+//  All accent-coloured sliders and benchmark button.
 // ════════════════════════════════════════════════════════════════════
 void build_test_detail() {
     scr_test_detail = mk_scr();
@@ -259,7 +272,7 @@ void build_test_detail() {
     lv_obj_set_width(lbl_test_detail, BTN_W);
     lv_label_set_long_mode(lbl_test_detail, LV_LABEL_LONG_WRAP);
 
-    // ── OLED brightness slider (hidden by default) ──
+    // ── OLED brightness slider (hidden by default) — accent colours ──
     test_brt_row = lv_obj_create(cont);
     lv_obj_set_size(test_brt_row, BTN_W, 64);
     lv_obj_set_style_bg_color(test_brt_row, tc->card_bg, 0);
@@ -283,7 +296,7 @@ void build_test_detail() {
     char bb[8]; snprintf(bb, sizeof(bb), "%d", cfg_brightness);
     lv_label_set_text(lbl_test_brt_val, bb);
     lv_obj_set_style_text_font(lbl_test_brt_val, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_test_brt_val, lv_color_make(0x88,0x33,0xCC), 0);
+    lv_obj_set_style_text_color(lbl_test_brt_val, accent_primary(), 0);
     lv_obj_align(lbl_test_brt_val, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     slider_test_brt = lv_slider_create(test_brt_row);
@@ -292,18 +305,18 @@ void build_test_detail() {
     lv_slider_set_range(slider_test_brt, 50, 255);
     lv_slider_set_value(slider_test_brt, cfg_brightness, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(slider_test_brt, tc->slider_track, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(slider_test_brt, lv_color_make(0x88,0x33,0xCC), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(slider_test_brt, lv_color_make(0xAA,0x55,0xEE), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(slider_test_brt, accent_dark(),  LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider_test_brt, accent_light(), LV_PART_KNOB);
     lv_obj_set_style_pad_all(slider_test_brt, 4, LV_PART_KNOB);
     lv_obj_add_event_cb(slider_test_brt, cb_slider_test_brt, LV_EVENT_VALUE_CHANGED, NULL);
 
-    // ── OLED benchmark button (hidden by default) ──
+    // ── OLED benchmark button (hidden by default) — accent colour ──
     btn_benchmark = mk_btn(cont, LV_SYMBOL_PLAY " Run Benchmark", BTN_W, 44, cb_benchmark);
-    lv_obj_set_style_bg_color(btn_benchmark, lv_color_make(0x88,0x33,0xCC), 0);
+    lv_obj_set_style_bg_color(btn_benchmark, accent_dark(), 0);
     lv_obj_set_style_text_font(lv_obj_get_child(btn_benchmark, 0), &lv_font_montserrat_16, 0);
     lv_obj_add_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
 
-    // ── Speaker volume control row (hidden by default) ──
+    // ── Speaker volume control row (hidden by default) — accent colours ──
     test_vol_row = lv_obj_create(cont);
     lv_obj_set_size(test_vol_row, BTN_W, 64);
     lv_obj_set_style_bg_color(test_vol_row, tc->card_bg, 0);
@@ -327,7 +340,7 @@ void build_test_detail() {
     char vbuf[8]; snprintf(vbuf, sizeof(vbuf), "%d", cfg_volume);
     lv_label_set_text(lbl_test_vol_val, vbuf);
     lv_obj_set_style_text_font(lbl_test_vol_val, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_test_vol_val, lv_color_make(0xCC,0x33,0x55), 0);
+    lv_obj_set_style_text_color(lbl_test_vol_val, accent_primary(), 0);
     lv_obj_align(lbl_test_vol_val, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     slider_test_vol = lv_slider_create(test_vol_row);
@@ -336,21 +349,23 @@ void build_test_detail() {
     lv_slider_set_range(slider_test_vol, 0, 100);
     lv_slider_set_value(slider_test_vol, cfg_volume, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(slider_test_vol, tc->slider_track, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(slider_test_vol, lv_color_make(0xCC,0x33,0x55), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(slider_test_vol, lv_color_make(0xFF,0x44,0x66), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(slider_test_vol, accent_dark(),  LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider_test_vol, accent_light(), LV_PART_KNOB);
     lv_obj_set_style_pad_all(slider_test_vol, 4, LV_PART_KNOB);
     lv_obj_add_event_cb(slider_test_vol, cb_slider_test_vol, LV_EVENT_VALUE_CHANGED, NULL);
+
+    add_back_gesture(scr_test_detail, cb_btn_back_test_detail);
 }
 
 // ════════════════════════════════════════════════════════════════════
 //  populate_test_detail — fill content based on test_active,
-//  update header title to match the button label
+//  update header title to match the button label (includes emoji)
 // ════════════════════════════════════════════════════════════════════
 void populate_test_detail() {
     if (!lbl_test_detail) return;
     int t = test_active;
 
-    // Update header title to the test button name
+    // Update header title — test_names[] now include LV_SYMBOL prefixes
     if (lbl_test_title && t >= 0 && t < 6)
         lv_label_set_text(lbl_test_title, test_names[t]);
 
@@ -367,12 +382,12 @@ void populate_test_detail() {
             "Check display for artifacts.\n\n"
             "Adjust brightness or run\n"
             "the OLED benchmark below.");
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x88,0x33,0xCC), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         // Show OLED-specific controls
         lv_obj_clear_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
         lv_slider_set_value(slider_test_brt, cfg_brightness, LV_ANIM_OFF);
-        char bv[8]; snprintf(bv, sizeof(bv), "%d", cfg_brightness);
-        lv_label_set_text(lbl_test_brt_val, bv);
+        { char bv[8]; snprintf(bv, sizeof(bv), "%d", cfg_brightness);
+          lv_label_set_text(lbl_test_brt_val, bv); }
         lv_obj_clear_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
         break;
     case 1:
@@ -380,21 +395,21 @@ void populate_test_detail() {
             "MPU6050 Test\n\n"
             "Reading IMU data...\n"
             "Waiting for sensor data.");
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x33,0x88,0xCC), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     case 2:
         lv_label_set_text(lbl_test_detail,
             "Flex Sensor Test\n\n"
             "Reading channels...\n"
             "Bend each finger to test.");
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x00,0xBB,0xEE), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     case 3:
         lv_label_set_text(lbl_test_detail,
             "Hall Effect Test\n\n"
             "Reading channels...\n"
             "Move magnets near sensors.");
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0xFF,0x88,0x00), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     case 4: {
         char buf[160];
@@ -406,7 +421,7 @@ void populate_test_detail() {
             bat_pct_cache, bat_voltage_v,
             bat_pct_cache > 20 ? "OK" : "LOW");
         lv_label_set_text(lbl_test_detail, buf);
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x33,0x99,0x33), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     }
     case 5:
@@ -414,12 +429,12 @@ void populate_test_detail() {
             "Speaker Test\n\n"
             "Playing tone...\n"
             "Adjust volume below.");
-        lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0xCC,0x33,0x55), 0);
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         // Show speaker volume control
         lv_obj_clear_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
         lv_slider_set_value(slider_test_vol, cfg_volume, LV_ANIM_OFF);
-        char vb[8]; snprintf(vb, sizeof(vb), "%d", cfg_volume);
-        lv_label_set_text(lbl_test_vol_val, vb);
+        { char vb[8]; snprintf(vb, sizeof(vb), "%d", cfg_volume);
+          lv_label_set_text(lbl_test_vol_val, vb); }
         break;
     default:
         lv_label_set_text(lbl_test_detail, "Unknown test");
