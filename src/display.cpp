@@ -86,8 +86,8 @@ void display_init() {
         Serial.println("[DISPLAY] FT3168 OK");
     }
 
-    // Init GFX
-    gfx->begin();
+    // Init GFX  — 80 MHz QSPI (default was 8 MHz; CO5300 supports up to 50 MHz)
+    gfx->begin(80000000);
     gfx->fillScreen(BLACK);
 
     // ── LVGL init ────────────────────────────
