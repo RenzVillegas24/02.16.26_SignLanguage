@@ -12,5 +12,24 @@ void gui_update(const SensorData &d);  // Feed latest sensor data into active sc
 void gui_set_mode(AppMode mode);       // Switch to a mode screen
 void gui_set_gesture(const char *text);// Update recognized gesture label
 void gui_set_battery(int pct);         // Update battery indicator
+void gui_set_cpu_usage(int pct);       // Update CPU usage indicator (0-100)
 void gui_show_web_qr(const char *url); // Set QR code content for WEB screen
 void gui_set_train_status(const char *msg);
+
+// Settings
+void gui_set_volume(uint8_t vol);         // 0-100
+void gui_set_brightness(uint8_t brt);     // 0-255
+uint8_t gui_get_volume();
+uint8_t gui_get_brightness();
+
+// Tests — update live data on test screen
+void gui_test_update(const SensorData &d);
+
+// Mode callback registration
+void gui_register_mode_callback(void (*cb)(AppMode));
+
+// Test action callbacks (set by main.cpp)
+void gui_register_test_speaker_cb(void (*cb)());
+void gui_register_test_oled_cb(void (*cb)());
+void gui_register_brightness_cb(void (*cb)(uint8_t));
+void gui_register_volume_cb(void (*cb)(uint8_t));

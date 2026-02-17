@@ -72,7 +72,9 @@ enum AppMode {
     MODE_PREDICT_WORDS,
     MODE_PREDICT_SPEECH,
     MODE_PREDICT_BOTH,
-    MODE_PREDICT_WEB
+    MODE_PREDICT_WEB,
+    MODE_SETTINGS,
+    MODE_TEST
 };
 
 // ─────────────────────────────────────────────

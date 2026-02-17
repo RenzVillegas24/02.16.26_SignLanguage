@@ -93,12 +93,27 @@ void display_init() {
     // ── LVGL init ────────────────────────────
     lv_init();
 
-    // Double-buffer, 40 rows each
-    size_t buf_px = LCD_WIDTH * 40;
+    // Full-screen double-buffer in PSRAM for maximum throughput
+    // 280×456×2 bytes ≈ 250 KB per buffer — fits easily in 8 MB PSRAM
+    size_t buf_px = LCD_WIDTH * LCD_HEIGHT;
     lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
-        sizeof(lv_color_t) * buf_px, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        sizeof(lv_color_t) * buf_px, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(
-        sizeof(lv_color_t) * buf_px, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        sizeof(lv_color_t) * buf_px, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    // Fallback: if PSRAM unavailable, use smaller internal buffers
+    if (!buf1 || !buf2) {
+        Serial.println("[DISPLAY] PSRAM alloc failed — falling back to internal RAM");
+        if (buf1) heap_caps_free(buf1);
+        if (buf2) heap_caps_free(buf2);
+        buf_px = LCD_WIDTH * 40;
+        buf1 = (lv_color_t *)heap_caps_malloc(
+            sizeof(lv_color_t) * buf_px, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        buf2 = (lv_color_t *)heap_caps_malloc(
+            sizeof(lv_color_t) * buf_px, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    } else {
+        Serial.printf("[DISPLAY] PSRAM buffers OK — %u px × 2\n", (unsigned)buf_px);
+    }
 
     if (!buf1 || !buf2) {
         Serial.println("[DISPLAY] LVGL buffer alloc FAILED!");

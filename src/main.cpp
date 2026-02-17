@@ -4,7 +4,7 @@
  *
  * Wires together:
  *   display  →  LVGL driver + AMOLED
- *   gui      →  LVGL screens (menu / train / predict)
+ *   gui      →  LVGL screens (menu / train / predict / settings / tests)
  *   sensors  →  Multiplexer + MPU6050
  *   audio    →  I2S + MAX98357A
  *   power    →  Button + battery + deep sleep
@@ -30,11 +30,16 @@ static uint32_t  last_display  = 0;
 static uint32_t  last_train_tx = 0;
 static uint32_t  last_bat_read = 0;
 
+// CPU usage tracking
+static uint32_t  cpu_busy_us   = 0;     // accumulated busy time (µs)
+static uint32_t  cpu_window_us = 0;     // accumulated total time (µs)
+static uint32_t  last_loop_us  = 0;     // micros() at start of previous loop
+static uint32_t  last_cpu_upd  = 0;     // millis() of last CPU% push
+static int       cpu_pct       = 0;     // smoothed CPU %
+
 // ════════════════════════════════════════════════════════════════════
 //  GUI → main mode-change callback
 // ════════════════════════════════════════════════════════════════════
-extern void gui_register_mode_callback(void (*cb)(AppMode));
-
 static void on_mode_change(AppMode m) {
     AppMode prev = current_mode;
     current_mode = m;
@@ -50,6 +55,31 @@ static void on_mode_change(AppMode m) {
 
     Serial.printf("[MAIN] Mode → %d\n", (int)m);
     power_reset_idle_timer();
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Settings / test callbacks (wired from GUI)
+// ════════════════════════════════════════════════════════════════════
+static void on_brightness_change(uint8_t val) {
+    display_set_brightness(val);
+    Serial.printf("[MAIN] Brightness → %d\n", val);
+}
+
+static void on_volume_change(uint8_t val) {
+    // Volume is stored in gui state; just log for now
+    Serial.printf("[MAIN] Volume → %d\n", val);
+}
+
+static void on_test_speaker() {
+    audio_play_tone(1000, 500);   // 1 kHz, 500 ms beep
+    Serial.println("[MAIN] Speaker test tone");
+}
+
+static void on_test_oled() {
+    // Flash the display brightness to confirm OLED is alive
+    display_set_brightness(255);
+    Serial.println("[MAIN] OLED test — full brightness flash");
+    // Restore after a short delay (non-blocking via flag)
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -111,6 +141,10 @@ void setup() {
     // 2. GUI (creates all LVGL screens, shows splash)
     gui_init();
     gui_register_mode_callback(on_mode_change);
+    gui_register_brightness_cb(on_brightness_change);
+    gui_register_volume_cb(on_volume_change);
+    gui_register_test_speaker_cb(on_test_speaker);
+    gui_register_test_oled_cb(on_test_oled);
     Serial.println("[MAIN] GUI ready");
 
     // 3. Sensors
@@ -133,6 +167,7 @@ void setup() {
 // ════════════════════════════════════════════════════════════════════
 void loop() {
     uint32_t now = millis();
+    uint32_t loop_start = micros();
 
     // ── LVGL tick ──────────────────────────────────────────────────
     lv_timer_handler();
@@ -210,6 +245,18 @@ void loop() {
         }
         break;
 
+    case MODE_SETTINGS:
+        // Idle — GUI handles slider interaction via LVGL
+        break;
+
+    case MODE_TEST:
+        // Continuously feed sensor data to test screen
+        if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
+            last_display = now;
+            gui_test_update(sensor_data);
+        }
+        break;
+
     case MODE_MENU:
     default:
         break;
@@ -219,5 +266,22 @@ void loop() {
     if (now - last_bat_read >= BATTERY_READ_INTERVAL_MS) {
         last_bat_read = now;
         gui_set_battery(power_battery_percent());
+    }
+
+    // ── CPU usage tracking ─────────────────────────────────────────
+    uint32_t loop_end = micros();
+    uint32_t elapsed  = loop_end - loop_start;
+    cpu_busy_us  += elapsed;
+    if (last_loop_us > 0)
+        cpu_window_us += (loop_end - last_loop_us);
+    last_loop_us = loop_end;
+
+    if (now - last_cpu_upd >= 1000) {   // update every 1 s
+        last_cpu_upd = now;
+        if (cpu_window_us > 0)
+            cpu_pct = (int)((uint64_t)cpu_busy_us * 100 / cpu_window_us);
+        cpu_busy_us  = 0;
+        cpu_window_us = 0;
+        gui_set_cpu_usage(cpu_pct);
     }
 }
