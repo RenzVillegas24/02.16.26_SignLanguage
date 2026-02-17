@@ -135,8 +135,9 @@ extern lv_obj_t *slider_test_brt;
 extern lv_obj_t *lbl_test_brt_val;
 extern lv_obj_t *btn_benchmark;
 
-extern lv_obj_t *bat_labels[SI_COUNT];
-extern lv_obj_t *cpu_labels[SI_COUNT];
+extern lv_obj_t *bat_label;
+extern lv_obj_t *cpu_label;
+extern lv_obj_t *stat_bar;
 
 // ════════════════════════════════════════════════════════════════════
 //  Styles
@@ -158,6 +159,7 @@ extern uint8_t  cfg_fps;
 extern bool     cfg_local_sensors;
 extern bool     cfg_local_words;
 extern bool     cfg_local_speech;
+extern bool     cfg_back_gesture;
 
 extern float    bat_voltage_v;
 extern int      bat_pct_cache;
@@ -195,7 +197,7 @@ lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
                   int w, int h, lv_event_cb_t cb);
 lv_obj_t *mk_nav_btn(lv_obj_t *parent, const char *text,
                       lv_event_cb_t cb);
-int       mk_header(lv_obj_t *scr, ScrIdx idx,
+int       mk_header(lv_obj_t *scr,
                      const char *title, lv_event_cb_t back_cb,
                      lv_obj_t **title_out = nullptr);
 lv_obj_t *mk_content(lv_obj_t *scr, int header_h);
@@ -215,6 +217,7 @@ lv_obj_t *add_dropdown_row(lv_obj_t *par, const char *icon,
                            uint16_t sel, lv_event_cb_t cb);
 
 void add_back_gesture(lv_obj_t *scr, lv_event_cb_t back_cb);
+void clear_back_gestures();
 
 // ════════════════════════════════════════════════════════════════════
 //  Internal functions — screen builders
@@ -228,6 +231,7 @@ void build_web();
 void build_settings();
 void build_test();
 void build_test_detail();
+void build_status_bar();
 void populate_test_detail();
 
 // ════════════════════════════════════════════════════════════════════
@@ -263,6 +267,7 @@ void cb_accent_dropdown(lv_event_t *e);
 void cb_local_sensors(lv_event_t *e);
 void cb_local_words(lv_event_t *e);
 void cb_local_speech(lv_event_t *e);
+void cb_back_gesture_switch(lv_event_t *e);
 
 void cb_test_oled(lv_event_t *e);
 void cb_test_mpu(lv_event_t *e);
@@ -272,3 +277,4 @@ void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 
 void cb_benchmark(lv_event_t *e);
+bool is_bench_running();

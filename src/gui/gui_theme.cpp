@@ -145,6 +145,9 @@ void apply_theme() {
     lv_obj_add_style(blank, &sty_scr, 0);
     lv_scr_load(blank);
 
+    // Clear stale back-gesture registry before deleting screens
+    clear_back_gestures();
+
     // Delete all screens
     del_scr(scr_menu);
     del_scr(scr_predict);
@@ -156,6 +159,8 @@ void apply_theme() {
     del_scr(scr_test_detail);
 
     // Rebuild with new palette / accent
+    lv_obj_clean(lv_layer_top());   // remove old status bar
+    build_status_bar();             // recreate on top layer
     build_menu();
     build_predict_menu();
     build_train();

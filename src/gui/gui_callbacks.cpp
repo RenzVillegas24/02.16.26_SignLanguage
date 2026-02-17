@@ -34,6 +34,18 @@ void cb_btn_back_tests(lv_event_t *e)   { (void)e; nav_to(scr_settings, false); 
 void cb_btn_back_test_detail(lv_event_t *e) { (void)e; nav_to(scr_test, false); cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1; }
 
 void cb_splash_timer(lv_timer_t *t) {
+    if (stat_bar) {
+        lv_obj_clear_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
+        lv_anim_t anim;
+        lv_anim_init(&anim);
+        lv_anim_set_var(&anim, stat_bar);
+        lv_anim_set_values(&anim, 0, 255);
+        lv_anim_set_time(&anim, 400);
+        lv_anim_set_exec_cb(&anim, [](void *var, int32_t v) {
+            lv_obj_set_style_opa((lv_obj_t*)var, v, 0);
+        });
+        lv_anim_start(&anim);
+    }
     lv_scr_load_anim(scr_menu, LV_SCR_LOAD_ANIM_FADE_ON, 400, 0, false);
     cur_gui_mode = MODE_MENU;
     lv_timer_del(t);
@@ -63,6 +75,12 @@ void cb_local_words(lv_event_t *e) {
 void cb_local_speech(lv_event_t *e) {
     lv_obj_t *sw = lv_event_get_target(e);
     cfg_local_speech = lv_obj_has_state(sw, LV_STATE_CHECKED);
+}
+
+void cb_back_gesture_switch(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    cfg_back_gesture = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    save_settings();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -568,6 +586,21 @@ static bool        _bench_running  = false;
 // Saved original monitor callback
 static void (*_orig_monitor)(struct _lv_disp_drv_t*, uint32_t, uint32_t) = nullptr;
 
+// Query whether benchmark is in progress (used by gesture blocker)
+bool is_bench_running() { return _bench_running || _bench_overlay != nullptr; }
+
+// ── Back from results — delete overlay, return to test detail ──
+static void bench_results_back_cb(lv_event_t *e) {
+    (void)e;
+    if (_bench_overlay) {
+        lv_obj_del(_bench_overlay);
+        _bench_overlay = nullptr;
+        _bench_title   = nullptr;
+        _bench_fps_lbl = nullptr;
+        _bench_area    = nullptr;
+    }
+}
+
 // ── Monitor callback — counts refreshes & render time per scene ──
 static void bench_monitor(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px) {
     if (_orig_monitor) _orig_monitor(drv, time_ms, px);
@@ -604,21 +637,68 @@ static void show_results(int count) {
     clear_area();
     if (!_bench_overlay) return;
 
-    // Hide live FPS label
+    // Hide live FPS label and old title
     if (_bench_fps_lbl) lv_obj_add_flag(_bench_fps_lbl, LV_OBJ_FLAG_HIDDEN);
+    if (_bench_title)   lv_obj_add_flag(_bench_title, LV_OBJ_FLAG_HIDDEN);
 
-    // Update title
-    if (_bench_title)
-        lv_label_set_text(_bench_title, LV_SYMBOL_OK " Benchmark Results");
+    // ── Nav-style header bar (below the global status bar) ──
+    lv_obj_t *nav = lv_obj_create(_bench_overlay);
+    lv_obj_set_size(nav, SCR_W, NAV_H);
+    lv_obj_set_pos(nav, 0, STAT_H);
+    lv_obj_add_style(nav, &sty_hdr, 0);
+    lv_obj_set_style_radius(nav, 0, 0);
+    lv_obj_set_style_border_width(nav, 0, 0);
+    lv_obj_set_style_pad_left(nav, SIDE_PAD, 0);
+    lv_obj_set_style_pad_right(nav, SIDE_PAD, 0);
+    lv_obj_clear_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Back button
+    lv_obj_t *bb = lv_btn_create(nav);
+    lv_obj_set_size(bb, BACK_SZ, BACK_SZ);
+    lv_obj_align(bb, LV_ALIGN_LEFT_MID, -4, 0);
+    lv_obj_set_style_bg_color(bb, lv_color_mix(accent_primary(), tc->back_btn_bg, 30), 0);
+    lv_obj_set_style_bg_opa(bb, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(bb, 10, 0);
+    lv_obj_set_style_border_width(bb, 0, 0);
+    lv_obj_set_style_shadow_width(bb, 0, 0);
+    lv_obj_add_event_cb(bb, bench_results_back_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *ba = lv_label_create(bb);
+    lv_label_set_text(ba, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(ba, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(ba, tc->hdr_text, 0);
+    lv_obj_center(ba);
+
+    // Title
+    lv_obj_t *tt = lv_label_create(nav);
+    lv_label_set_text(tt, "Results");
+    lv_obj_set_style_text_font(tt, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(tt, tc->hdr_text, 0);
+    lv_obj_align(tt, LV_ALIGN_LEFT_MID, BACK_SZ + 2, 0);
+
+    // ── Separator ──
+    lv_obj_t *sep0 = lv_obj_create(_bench_overlay);
+    lv_obj_set_size(sep0, SCR_W, SEP_H);
+    lv_obj_set_pos(sep0, 0, STAT_H + NAV_H);
+    lv_obj_set_style_bg_color(sep0, tc->sep, 0);
+    lv_obj_set_style_bg_opa(sep0, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(sep0, 0, 0);
+    lv_obj_set_style_radius(sep0, 0, 0);
+
+    // ── Reposition results area below header ──
+    int results_y = STAT_H + NAV_H + SEP_H;
+    lv_obj_set_pos(_bench_area, 0, results_y);
+    lv_obj_set_size(_bench_area, SCR_W, SCR_H - results_y);
 
     // Make area scrollable for results
     lv_obj_set_flex_flow(_bench_area, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(_bench_area, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(_bench_area, 2, 0);
-    lv_obj_set_style_pad_left(_bench_area, 8, 0);
-    lv_obj_set_style_pad_right(_bench_area, 8, 0);
-    lv_obj_set_style_pad_top(_bench_area, 6, 0);
+    lv_obj_set_style_pad_left(_bench_area, SIDE_PAD, 0);
+    lv_obj_set_style_pad_right(_bench_area, SIDE_PAD, 0);
+    lv_obj_set_style_pad_top(_bench_area, 10, 0);
+    lv_obj_set_style_pad_bottom(_bench_area, 10, 0);
     lv_obj_add_flag(_bench_area, LV_OBJ_FLAG_SCROLLABLE);
 
     // Average FPS
@@ -641,11 +721,11 @@ static void show_results(int count) {
     lv_label_set_text(al, abuf);
     lv_obj_set_style_text_font(al, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(al, accent_primary(), 0);
-    lv_obj_set_width(al, SA_W - 20);
+    lv_obj_set_width(al, SCR_W - 2 * SIDE_PAD - 20);
 
     // Separator
     lv_obj_t *sep = lv_obj_create(_bench_area);
-    lv_obj_set_size(sep, SA_W - 24, 1);
+    lv_obj_set_size(sep, SCR_W - 2 * SIDE_PAD - 24, 1);
     lv_obj_set_style_bg_color(sep, tc->sep, 0);
     lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(sep, 0, 0);
@@ -659,7 +739,7 @@ static void show_results(int count) {
         lv_label_set_text(r, buf);
         lv_obj_set_style_text_font(r, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(r, tc->card_text, 0);
-        lv_obj_set_width(r, SA_W - 20);
+        lv_obj_set_width(r, SCR_W - 2 * SIDE_PAD - 20);
     }
 }
 
@@ -678,29 +758,46 @@ static void bench_finish(bool show_partial) {
     if (!_bench_overlay) return;
 
     // Stop all animations completely before anything else
-    clear_area();  // Cleans scene area animations
-    lv_anim_del(_bench_overlay, NULL);  // Stop overlay animations
+    clear_area();
+    lv_anim_del(_bench_overlay, NULL);
     lv_anim_del(_bench_title, NULL);
     lv_anim_del(_bench_fps_lbl, NULL);
     
     // Force complete refresh to finish all pending draws
     lv_refr_now(NULL);
-    delay(50);  // Give time for all operations to complete
+    delay(50);
     
     if (show_partial) {
-        show_results(_bench_cur < BENCH_NUM_SCENES ? _bench_cur + 1 : BENCH_NUM_SCENES);
-        // Don't delete overlay - results are displayed in it
+        // Show only fully completed scenes
+        int completed = (_bench_cur >= BENCH_NUM_SCENES)
+                        ? BENCH_NUM_SCENES : _bench_cur;
+        if (completed > 0) {
+            show_results(completed);
+        } else {
+            // Nothing completed — just close overlay
+            lv_obj_del(_bench_overlay);
+            _bench_overlay = nullptr;
+            _bench_title   = nullptr;
+            _bench_fps_lbl = nullptr;
+            _bench_area    = nullptr;
+            lv_refr_now(NULL);
+            delay(50);
+        }
     } else {
-        // Delete overlay completely
         lv_obj_del(_bench_overlay);
         _bench_overlay = nullptr;
-        _bench_title = nullptr;
+        _bench_title   = nullptr;
         _bench_fps_lbl = nullptr;
-        _bench_area = nullptr;
-        // Final cleanup
+        _bench_area    = nullptr;
         lv_refr_now(NULL);
         delay(50);
     }
+}
+
+// ── Stop button callback ──
+static void bench_stop_cb(lv_event_t *e) {
+    (void)e;
+    bench_finish(true);
 }
 
 // ── Scene advance timer (200 ms tick) ──
@@ -749,12 +846,6 @@ static void bench_tick_cb(lv_timer_t *t) {
     }
 }
 
-// ── Stop button callback ──
-static void bench_stop_cb(lv_event_t *e) {
-    (void)e;
-    bench_finish(true);  // show_results is called inside bench_finish
-}
-
 // ── Public entry point (called from cb_benchmark) ──
 void cb_benchmark(lv_event_t *e) {
     (void)e;
@@ -794,10 +885,10 @@ void cb_benchmark(lv_event_t *e) {
     lv_obj_set_style_text_color(_bench_fps_lbl, accent_primary(), 0);
     lv_obj_align(_bench_fps_lbl, LV_ALIGN_TOP_MID, 0, 30);
 
-    // Scene area
+    // Scene area (between FPS label and stop button)
     _bench_area = lv_obj_create(_bench_overlay);
     lv_obj_remove_style_all(_bench_area);
-    lv_obj_set_size(_bench_area, SA_W, SA_H);
+    lv_obj_set_size(_bench_area, SCR_W, SCR_H - 60 - 56);
     lv_obj_set_pos(_bench_area, 0, 60);
     lv_obj_set_style_bg_opa(_bench_area, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(_bench_area, LV_OBJ_FLAG_SCROLLABLE);

@@ -28,7 +28,7 @@ void build_splash() {
 // ════════════════════════════════════════════════════════════════════
 void build_menu() {
     scr_menu = mk_scr();
-    int hh = mk_header(scr_menu, SI_MENU, "Menu", NULL);
+    int hh = mk_header(scr_menu, "Signa Menu", NULL);
 
     lv_obj_t *cont = mk_content(scr_menu, hh);
 
@@ -42,8 +42,7 @@ void build_menu() {
 // ════════════════════════════════════════════════════════════════════
 void build_predict_menu() {
     scr_predict = mk_scr();
-    int hh = mk_header(scr_predict, SI_PRED,
-                        LV_SYMBOL_EYE_OPEN "  Predict", cb_btn_back_menu);
+    int hh = mk_header(scr_predict, "Predict", cb_btn_back_menu);
 
     lv_obj_t *cont = mk_content(scr_predict, hh);
 
@@ -58,7 +57,7 @@ void build_predict_menu() {
 // ════════════════════════════════════════════════════════════════════
 void build_train() {
     scr_train = mk_scr();
-    int hh = mk_header(scr_train, SI_TRAIN, LV_SYMBOL_UPLOAD "  Train", cb_btn_back_menu);
+    int hh = mk_header(scr_train, "Train", cb_btn_back_menu);
 
     lv_obj_t *cont = mk_content(scr_train, hh);
 
@@ -86,8 +85,7 @@ void build_train() {
 // ════════════════════════════════════════════════════════════════════
 void build_local() {
     scr_local = mk_scr();
-    int hh = mk_header(scr_local, SI_LOCAL,
-                        LV_SYMBOL_HOME "  Local", cb_btn_back_predict);
+    int hh = mk_header(scr_local, "Local", cb_btn_back_predict);
 
     lv_obj_t *cont = mk_content(scr_local, hh);
 
@@ -124,7 +122,7 @@ void build_local() {
 // ════════════════════════════════════════════════════════════════════
 void build_web() {
     scr_web = mk_scr();
-    int hh = mk_header(scr_web, SI_WEB, LV_SYMBOL_WIFI "  Web", cb_btn_back_predict);
+    int hh = mk_header(scr_web, "Web", cb_btn_back_predict);
     (void)hh;
 
     // ── Status label (above QR) ──
@@ -170,8 +168,7 @@ void build_web() {
 // ════════════════════════════════════════════════════════════════════
 void build_settings() {
     scr_settings = mk_scr();
-    int hh = mk_header(scr_settings, SI_SETTINGS,
-                        LV_SYMBOL_SETTINGS "  Settings", cb_btn_back_menu);
+    int hh = mk_header(scr_settings, "Settings", cb_btn_back_menu);
 
     lv_obj_t *cont = mk_content(scr_settings, hh);
 
@@ -193,6 +190,11 @@ void build_settings() {
     dd_accent = add_dropdown_row(cont, LV_SYMBOL_TINT, "Accent Color",
                                  accent_dropdown_opts(), cfg_accent,
                                  cb_accent_dropdown);
+
+    // -- Interaction --
+    mk_section(cont, "INTERACTION");
+    add_switch_row(cont, LV_SYMBOL_LEFT, "Back Gesture",
+                   cfg_back_gesture, cb_back_gesture_switch);
 
     // -- Audio --
     mk_section(cont, "AUDIO");
@@ -238,8 +240,7 @@ void build_settings() {
 // ════════════════════════════════════════════════════════════════════
 void build_test() {
     scr_test = mk_scr();
-    int hh = mk_header(scr_test, SI_TEST,
-                        LV_SYMBOL_CHARGE "  Tests", cb_btn_back_tests);
+    int hh = mk_header(scr_test, "Tests", cb_btn_back_tests);
 
     lv_obj_t *cont = mk_content(scr_test, hh);
 
@@ -259,8 +260,7 @@ void build_test() {
 // ════════════════════════════════════════════════════════════════════
 void build_test_detail() {
     scr_test_detail = mk_scr();
-    int hh = mk_header(scr_test_detail, SI_TEST_DETAIL,
-                        "Test", cb_btn_back_test_detail, &lbl_test_title);
+    int hh = mk_header(scr_test_detail, "Test", cb_btn_back_test_detail, &lbl_test_title);
 
     lv_obj_t *cont = mk_content(scr_test_detail, hh);
 
@@ -377,11 +377,14 @@ void populate_test_detail() {
     switch (t) {
     case 0:
         lv_label_set_text(lbl_test_detail,
-            "OLED Test\n\n"
-            "Running color pattern...\n"
-            "Check display for artifacts.\n\n"
-            "Adjust brightness or run\n"
-            "the OLED benchmark below.");
+            "Display Benchmark\n\n"
+            "Runs 17 rendering scenes\n"
+            "measuring real-time FPS:\n"
+            "fills, gradients, shapes,\n"
+            "text, arcs, shadows and\n"
+            "complex overlap layers.\n\n"
+            "Adjust brightness or tap\n"
+            "Run Benchmark below.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         // Show OLED-specific controls
         lv_obj_clear_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);

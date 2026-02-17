@@ -59,8 +59,9 @@ lv_obj_t *slider_test_brt  = nullptr;
 lv_obj_t *lbl_test_brt_val = nullptr;
 lv_obj_t *btn_benchmark    = nullptr;
 
-lv_obj_t *bat_labels[SI_COUNT] = {};
-lv_obj_t *cpu_labels[SI_COUNT] = {};
+lv_obj_t *bat_label = nullptr;
+lv_obj_t *cpu_label = nullptr;
+lv_obj_t *stat_bar  = nullptr;
 
 // ════════════════════════════════════════════════════════════════════
 //  Settings state
@@ -75,6 +76,7 @@ uint8_t  cfg_accent     = 0;        // accent colour index (0..NUM_ACCENTS-1)
 bool     cfg_local_sensors = false;
 bool     cfg_local_words   = true;
 bool     cfg_local_speech  = false;
+bool     cfg_back_gesture  = true;
 
 float    bat_voltage_v  = 4.2f;
 int      bat_pct_cache  = 100;
@@ -113,6 +115,7 @@ void load_settings() {
     cfg_fps        = prefs.getUChar("fps", 30);
     cfg_accent     = prefs.getUChar("acnt", 0);
     if (cfg_accent >= NUM_ACCENTS) cfg_accent = 0;
+    cfg_back_gesture = prefs.getBool("bgest", true);
     prefs.end();
 }
 
@@ -125,6 +128,7 @@ void save_settings() {
     prefs.putBool("dark", cfg_dark_mode);
     prefs.putUChar("fps", cfg_fps);
     prefs.putUChar("acnt", cfg_accent);
+    prefs.putBool("bgest", cfg_back_gesture);
     prefs.end();
 }
 
@@ -146,6 +150,7 @@ void gui_init() {
     }
 
     build_splash();
+    build_status_bar();
     build_menu();
     build_predict_menu();
     build_train();
@@ -156,6 +161,7 @@ void gui_init() {
     build_test_detail();
 
     lv_scr_load(scr_splash);
+    if (stat_bar) lv_obj_add_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
     lv_timer_create(cb_splash_timer, 2000, NULL);
 }
 
@@ -254,10 +260,8 @@ void gui_set_battery(int pct) {
     else               icon = LV_SYMBOL_BATTERY_EMPTY;
 
     snprintf(buf, sizeof(buf), "%s %d%%", icon, pct);
-    for (int i = 0; i < SI_COUNT; i++) {
-        if (bat_labels[i])
-            lv_label_set_text(bat_labels[i], buf);
-    }
+    if (bat_label)
+        lv_label_set_text(bat_label, buf);
 
     if (cur_gui_mode == MODE_TEST && test_active == 4 && lbl_test_detail) {
         char vbuf[120];
@@ -316,10 +320,8 @@ bool gui_local_use_speech()           { return cfg_local_speech; }
 void gui_set_cpu_usage(int pct) {
     char buf[16];
     snprintf(buf, sizeof(buf), "CPU %d%%", pct);
-    for (int i = 0; i < SI_COUNT; i++) {
-        if (cpu_labels[i])
-            lv_label_set_text(cpu_labels[i], buf);
-    }
+    if (cpu_label)
+        lv_label_set_text(cpu_label, buf);
 }
 
 void gui_update_about(const SystemInfoData &info) {
