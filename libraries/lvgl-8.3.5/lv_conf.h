@@ -485,7 +485,7 @@
     #define LV_LABEL_LONG_TXT_HINT 1  /*Store some extra info in labels to speed up drawing of very long texts*/
 #endif
 
-#define LV_USE_LINE       1
+#define LV_USE_LINE       0
 
 #define LV_USE_ROLLER     0   /*Requires: lv_label*/
 #if LV_USE_ROLLER
@@ -501,7 +501,7 @@
     #define LV_TEXTAREA_DEF_PWD_SHOW_TIME 1500    /*ms*/
 #endif
 
-#define LV_USE_TABLE      1
+#define LV_USE_TABLE      0
 
 /*==================
  * EXTRA COMPONENTS
@@ -736,7 +736,7 @@
 #define LV_USE_DEMO_KEYPAD_AND_ENCODER 0
 
 /*Benchmark your system*/
-#define LV_USE_DEMO_BENCHMARK 1
+#define LV_USE_DEMO_BENCHMARK 0
 #if LV_USE_DEMO_BENCHMARK
 /*Use RGB565A8 images with 16 bit color depth instead of ARGB8565*/
 #define LV_DEMO_BENCHMARK_RGB565A8 0

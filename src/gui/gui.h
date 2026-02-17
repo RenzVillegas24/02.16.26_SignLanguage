@@ -17,6 +17,7 @@ void gui_set_gesture(const char *text);// Update recognized gesture label
 void gui_set_battery(int pct);         // Update battery indicator
 void gui_set_cpu_usage(int pct);       // Update CPU usage indicator (0-100)
 void gui_show_web_qr(const char *url); // Set QR code content for WEB screen
+void gui_web_set_connected(bool connected); // Toggle WiFi QR ↔ webpage QR
 void gui_set_train_status(const char *msg);
 
 // Settings

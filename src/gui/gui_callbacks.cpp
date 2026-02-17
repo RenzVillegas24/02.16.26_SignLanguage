@@ -3,7 +3,6 @@
  * @brief All LVGL event callbacks (navigation, sliders, settings, tests)
  */
 #include "gui_internal.h"
-#include "demos/benchmark/lv_demo_benchmark.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Helpers
@@ -197,11 +196,84 @@ void cb_test_speaker(lv_event_t *e) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  OLED benchmark callback
+//  Custom OLED benchmark  (timer-based, non-blocking)
 // ════════════════════════════════════════════════════════════════════
+static lv_obj_t  *bench_overlay  = nullptr;
+static lv_timer_t *bench_timer   = nullptr;
+static int  bench_phase          = 0;
+static int  bench_frame          = 0;
+static uint32_t bench_phase_start= 0;
+static float bench_fps[5]        = {};
+#define BENCH_FRAMES_PER_PHASE   60
+
+static const lv_color_t bench_colors[5] = {
+    LV_COLOR_MAKE(0xFF,0x00,0x00),   // Red
+    LV_COLOR_MAKE(0x00,0xFF,0x00),   // Green
+    LV_COLOR_MAKE(0x00,0x00,0xFF),   // Blue
+    LV_COLOR_MAKE(0xFF,0xFF,0xFF),   // White
+    LV_COLOR_MAKE(0x00,0x00,0x00)    // Black
+};
+
+static void bench_tick(lv_timer_t *t) {
+    if (!bench_overlay) { lv_timer_del(t); bench_timer = nullptr; return; }
+
+    bench_frame++;
+    // Force a full invalidation each frame so LVGL actually redraws
+    lv_obj_invalidate(bench_overlay);
+
+    if (bench_frame >= BENCH_FRAMES_PER_PHASE) {
+        uint32_t elapsed = millis() - bench_phase_start;
+        bench_fps[bench_phase] = (elapsed > 0)
+            ? (BENCH_FRAMES_PER_PHASE * 1000.0f / (float)elapsed) : 0;
+        bench_phase++;
+
+        if (bench_phase < 5) {
+            // Next color phase
+            lv_obj_set_style_bg_color(bench_overlay, bench_colors[bench_phase], 0);
+            bench_frame = 0;
+            bench_phase_start = millis();
+        } else {
+            // All phases done — clean up and show results
+            lv_obj_del(bench_overlay);
+            bench_overlay = nullptr;
+            lv_timer_del(t);
+            bench_timer = nullptr;
+
+            float avg = 0;
+            for (int i = 0; i < 5; i++) avg += bench_fps[i];
+            avg /= 5.0f;
+
+            char buf[280];
+            snprintf(buf, sizeof(buf),
+                "OLED Benchmark Results\n\n"
+                "Red:    %.1f FPS\n"
+                "Green:  %.1f FPS\n"
+                "Blue:   %.1f FPS\n"
+                "White:  %.1f FPS\n"
+                "Black:  %.1f FPS\n\n"
+                "Average: %.1f FPS",
+                bench_fps[0], bench_fps[1], bench_fps[2],
+                bench_fps[3], bench_fps[4], avg);
+            if (lbl_test_detail)
+                lv_label_set_text(lbl_test_detail, buf);
+        }
+    }
+}
+
 void cb_benchmark(lv_event_t *e) {
     (void)e;
-    // Launch the LVGL benchmark demo — takes over the display.
-    // The device must be reset to return to the normal GUI.
-    lv_demo_benchmark();
+    if (bench_overlay) return;  // already running
+
+    // Create fullscreen color overlay on top of current screen
+    bench_overlay = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(bench_overlay);
+    lv_obj_set_size(bench_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(bench_overlay, 0, 0);
+    lv_obj_set_style_bg_color(bench_overlay, bench_colors[0], 0);
+    lv_obj_set_style_bg_opa(bench_overlay, LV_OPA_COVER, 0);
+
+    bench_phase       = 0;
+    bench_frame       = 0;
+    bench_phase_start = millis();
+    bench_timer       = lv_timer_create(bench_tick, 1, NULL);
 }

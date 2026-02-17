@@ -1,6 +1,6 @@
 /*
  * @file main.cpp
- * @brief Entry point — Sign Language Translator Glove v4.0
+ * @brief Entry point — Signa – Sign Language Translator v4.0
  *
  * Wires together:
  *   display  →  LVGL driver + AMOLED
@@ -133,7 +133,7 @@ static void classify_gesture() {
 void setup() {
     Serial.begin(EI_SERIAL_BAUD);
     delay(200);
-    Serial.println("\n=== Sign Language Glove v4.0 ===");
+    Serial.println("\n=== Signa v4.0 ===");
 
     // 1. Display + LVGL
     display_init();
@@ -227,6 +227,7 @@ void loop() {
     case MODE_PREDICT_WEB:
         classify_gesture();
         web_server_update(sensor_data, gesture_text);
+        gui_web_set_connected(web_server_num_clients() > 0);
         if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             gui_set_gesture(gesture_text);

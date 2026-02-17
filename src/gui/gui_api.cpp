@@ -42,8 +42,10 @@ lv_obj_t *dd_fps           = nullptr;
 lv_obj_t *lbl_about        = nullptr;
 lv_obj_t *lbl_train_stat   = nullptr;
 
-lv_obj_t *qr_web           = nullptr;
-lv_obj_t *lbl_web_stat     = nullptr;
+lv_obj_t *qr_wifi           = nullptr;
+lv_obj_t *qr_web            = nullptr;
+lv_obj_t *lbl_web_stat      = nullptr;
+bool      web_client_connected = false;
 
 lv_obj_t *lbl_test_detail  = nullptr;
 lv_obj_t *lbl_test_title   = nullptr;   // dynamic header title for test detail
@@ -265,10 +267,30 @@ void gui_set_battery(int pct) {
 void gui_show_web_qr(const char *url) {
     if (qr_web && url)
         lv_qrcode_update(qr_web, url, strlen(url));
-    if (lbl_web_stat && url) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "WiFi: %s\n%s", WIFI_AP_SSID, url);
-        lv_label_set_text(lbl_web_stat, buf);
+}
+
+void gui_web_set_connected(bool connected) {
+    if (connected == web_client_connected) return;
+    web_client_connected = connected;
+
+    if (connected) {
+        // Client connected — show webpage QR, hide WiFi QR
+        if (qr_wifi) lv_obj_add_flag(qr_wifi, LV_OBJ_FLAG_HIDDEN);
+        if (qr_web)  lv_obj_clear_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
+        if (lbl_web_stat)
+            lv_label_set_text(lbl_web_stat,
+                "Client connected!\n"
+                "Scan to open webpage\n"
+                "http://192.168.4.1");
+    } else {
+        // No clients — show WiFi QR, hide webpage QR
+        if (qr_wifi) lv_obj_clear_flag(qr_wifi, LV_OBJ_FLAG_HIDDEN);
+        if (qr_web)  lv_obj_add_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
+        if (lbl_web_stat)
+            lv_label_set_text(lbl_web_stat,
+                "Scan to connect to WiFi\n"
+                "SSID: " WIFI_AP_SSID "\n"
+                "Pass: " WIFI_AP_PASS);
     }
 }
 
@@ -303,7 +325,7 @@ void gui_update_about(const SystemInfoData &info) {
     uint32_t s = info.uptime_sec % 60;
 
     snprintf(buf, sizeof(buf),
-        "Hybrid-Sense v4.0\n"
+        "Signa v4.0\n"
         "%s rev %d  |  %d core%s\n"
         "SDK: %s\n"
         "\n"

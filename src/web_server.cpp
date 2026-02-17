@@ -28,7 +28,7 @@ static const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign Language Glove</title>
+<title>Signa – Sign Language Glove</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#111;color:#eee;font-family:'Segoe UI',sans-serif;
@@ -54,7 +54,7 @@ h2{font-size:1rem;color:#888;margin:12px 0 6px}
 </style>
 </head>
 <body>
-<h1>&#x1F91F; Hybrid-Sense Glove</h1>
+<h1>&#x1F91F; Signa Glove</h1>
 <div id="gesture">---</div>
 
 <h2>Flex Sensors</h2>
@@ -206,6 +206,10 @@ void web_server_update(const SensorData &d, const char *gesture) {
 }
 
 bool web_server_is_running() { return running; }
+
+int web_server_num_clients() {
+    return WiFi.softAPgetStationNum();
+}
 
 String web_server_get_url() {
     return "http://" + WiFi.softAPIP().toString();

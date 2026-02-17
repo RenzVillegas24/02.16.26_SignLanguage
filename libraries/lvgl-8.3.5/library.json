@@ -9,8 +9,7 @@
 	},
 	"build": {
 		"includeDir": ".",
-		"srcDir": ".",
-		"srcFilter": ["+<src/>", "+<demos/benchmark/>", "+<demos/benchmark/assets/>"]
+		"srcDir": "src"
 	},
 	"license": "MIT",
 	"homepage": "https://lvgl.io",

@@ -3,7 +3,6 @@
  * @brief Screen builders (build_splash, build_menu, …)
  */
 #include "gui_internal.h"
-#include "demos/benchmark/lv_demo_benchmark.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Splash
@@ -12,12 +11,12 @@ void build_splash() {
     scr_splash = mk_scr();
 
     lv_obj_t *title = lv_label_create(scr_splash);
-    lv_label_set_text(title, "Hybrid-Sense");
+    lv_label_set_text(title, "Signa");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, -20);
 
     lv_obj_t *sub = lv_label_create(scr_splash);
-    lv_label_set_text(sub, "Sign Language Glove v4.0");
+    lv_label_set_text(sub, "Sign Language Translator");
     lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(sub, lv_color_make(0x00,0xCC,0xFF), 0);
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, 16);
@@ -117,29 +116,48 @@ void build_local() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Web
+//  Web  — WiFi QR first, then webpage QR when client connects
 // ════════════════════════════════════════════════════════════════════
 void build_web() {
     scr_web = mk_scr();
     int hh = mk_header(scr_web, SI_WEB, LV_SYMBOL_WIFI "  Web", cb_btn_back_predict);
     (void)hh;
 
-    qr_web = lv_qrcode_create(scr_web, 140,
-                               lv_color_white(), lv_color_black());
-    lv_obj_align(qr_web, LV_ALIGN_CENTER, 0, -24);
-    const char *ph = "http://192.168.4.1";
-    lv_qrcode_update(qr_web, ph, strlen(ph));
-    lv_obj_set_style_border_color(qr_web, lv_color_white(), 0);
-    lv_obj_set_style_border_width(qr_web, 5, 0);
-
+    // ── Status label (above QR) ──
     lbl_web_stat = lv_label_create(scr_web);
     lv_label_set_text(lbl_web_stat,
-        "WiFi: " WIFI_AP_SSID "\nhttp://192.168.4.1");
+        "Scan to connect to WiFi\n"
+        "SSID: " WIFI_AP_SSID "\n"
+        "Pass: " WIFI_AP_PASS);
     lv_obj_set_style_text_font(lbl_web_stat, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl_web_stat, tc->sub_text, 0);
     lv_obj_set_style_text_align(lbl_web_stat, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(lbl_web_stat, SCR_W - 2*SIDE_PAD);
-    lv_obj_align(lbl_web_stat, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_align(lbl_web_stat, LV_ALIGN_CENTER, 0, -120);
+
+    // ── WiFi credentials QR (initially visible) ──
+    qr_wifi = lv_qrcode_create(scr_web, 140,
+                                lv_color_white(), lv_color_black());
+    lv_obj_align(qr_wifi, LV_ALIGN_CENTER, 0, 10);
+    // Standard WiFi QR format
+    char wifi_qr_data[128];
+    snprintf(wifi_qr_data, sizeof(wifi_qr_data),
+        "WIFI:T:WPA;S:%s;P:%s;;", WIFI_AP_SSID, WIFI_AP_PASS);
+    lv_qrcode_update(qr_wifi, wifi_qr_data, strlen(wifi_qr_data));
+    lv_obj_set_style_border_color(qr_wifi, lv_color_white(), 0);
+    lv_obj_set_style_border_width(qr_wifi, 5, 0);
+
+    // ── Webpage QR (initially hidden — shown when client connects) ──
+    qr_web = lv_qrcode_create(scr_web, 140,
+                               lv_color_white(), lv_color_black());
+    lv_obj_align(qr_web, LV_ALIGN_CENTER, 0, 10);
+    const char *ph = "http://192.168.4.1";
+    lv_qrcode_update(qr_web, ph, strlen(ph));
+    lv_obj_set_style_border_color(qr_web, lv_color_white(), 0);
+    lv_obj_set_style_border_width(qr_web, 5, 0);
+    lv_obj_add_flag(qr_web, LV_OBJ_FLAG_HIDDEN);
+
+    web_client_connected = false;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -197,7 +215,7 @@ void build_settings() {
 
     lbl_about = lv_label_create(abox);
     lv_label_set_text(lbl_about,
-        "Hybrid-Sense v4.0\n"
+        "Signa v4.0\n"
         "Loading system info...");
     lv_obj_set_style_text_font(lbl_about, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl_about, tc->about_text, 0);
@@ -348,7 +366,7 @@ void populate_test_detail() {
             "Running color pattern...\n"
             "Check display for artifacts.\n\n"
             "Adjust brightness or run\n"
-            "the LVGL benchmark below.");
+            "the OLED benchmark below.");
         lv_obj_set_style_text_color(lbl_test_detail, lv_color_make(0x88,0x33,0xCC), 0);
         // Show OLED-specific controls
         lv_obj_clear_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);

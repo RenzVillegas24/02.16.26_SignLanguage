@@ -108,8 +108,10 @@ extern lv_obj_t *lbl_about;
 extern lv_obj_t *lbl_train_stat;
 
 // Web
+extern lv_obj_t *qr_wifi;
 extern lv_obj_t *qr_web;
 extern lv_obj_t *lbl_web_stat;
+extern bool      web_client_connected;
 
 // Test detail
 extern lv_obj_t *lbl_test_detail;
