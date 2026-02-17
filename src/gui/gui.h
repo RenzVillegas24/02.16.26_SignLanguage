@@ -1,6 +1,6 @@
 /*
- * @file gui.h
- * @brief LVGL GUI — screen management for all application modes
+ * @file gui/gui.h
+ * @brief LVGL GUI — public API for screen management
  */
 #pragma once
 

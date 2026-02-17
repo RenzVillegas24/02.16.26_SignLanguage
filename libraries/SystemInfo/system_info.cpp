@@ -75,6 +75,7 @@ void sysinfo_update(uint8_t cpu_pct, uint16_t lvgl_fps) {
     s_info.cpu_freq_mhz  = ESP.getCpuFreqMHz();
     s_info.cpu_usage_pct = cpu_pct;
     s_info.lvgl_fps      = lvgl_fps;
+    s_info.cpu_temp_c    = temperatureRead();
 
     // ── Uptime ─────────────────────────────────────────────────────
     s_info.uptime_sec = (uint32_t)(millis() / 1000);

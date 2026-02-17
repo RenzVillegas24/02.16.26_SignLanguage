@@ -31,6 +31,7 @@ struct SystemInfoData {
     uint32_t cpu_freq_mhz;       // MHz
     uint8_t  cpu_cores;
     uint8_t  cpu_usage_pct;      // 0-100  (fed externally)
+    float    cpu_temp_c;         // internal temperature sensor (°C)
 
     // LVGL rendering
     uint16_t lvgl_fps;           // frames per second  (fed externally)

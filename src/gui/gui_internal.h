@@ -1,0 +1,252 @@
+/*
+ * @file gui/gui_internal.h
+ * @brief Internal shared declarations for all GUI compilation units.
+ *        NOT part of the public API — only #included by gui/*.cpp files.
+ */
+#pragma once
+
+#include <lvgl.h>
+#include "config.h"
+#include <cstring>
+
+// ════════════════════════════════════════════════════════════════════
+//  Layout constants
+// ════════════════════════════════════════════════════════════════════
+static const int SCR_W    = LCD_WIDTH;           // 280
+static const int SCR_H    = LCD_HEIGHT;          // 456
+static const int STAT_H   = 28;                  // status-bar height
+static const int NAV_H    = 54;                  // navigation-bar height
+static const int SEP_H    = 1;                   // separator thickness
+static const int SIDE_PAD = 12;
+static const int BACK_SZ  = 46;                  // back-button touchable size
+static const int BTN_W    = SCR_W - 2 * SIDE_PAD;// 256
+static const int BTN_H    = 52;
+static const int BTN_GAP  = 8;
+static const int BTN_RAD  = 12;
+static const int ANIM_TIME= 200;
+
+// ════════════════════════════════════════════════════════════════════
+//  Theme colour palette
+// ════════════════════════════════════════════════════════════════════
+struct ThemeColors {
+    lv_color_t scr_bg;           // screen background
+    lv_color_t scr_text;         // default text
+    lv_color_t hdr_bg;           // header / nav bar background
+    lv_color_t hdr_text;         // header text (title, battery, cpu)
+    lv_color_t sep;              // separator line
+    lv_color_t card_bg;          // card / row container bg
+    lv_color_t card_text;        // card label text
+    lv_color_t section_text;     // section header text
+    lv_color_t sub_text;         // subtitle / description text
+    lv_color_t about_bg;         // about box bg
+    lv_color_t about_text;       // about label text
+    lv_color_t diag_bg;          // diagnostics panel bg
+    lv_color_t diag_text;        // diagnostics description text
+    lv_color_t back_btn_bg;      // back-button bg
+    lv_color_t slider_track;     // slider track (LV_PART_MAIN)
+    lv_color_t dd_bg;            // dropdown bg
+    lv_color_t dd_list_bg;       // dropdown list bg
+    lv_color_t dd_list_text;     // dropdown list text
+    lv_color_t bar_bg;           // sensor bar bg
+    lv_color_t bar_label;        // sensor bar label text
+    lv_color_t sw_bg;            // switch unchecked bg
+};
+
+extern const ThemeColors TC_DARK;
+extern const ThemeColors TC_LIGHT;
+extern const ThemeColors *tc;      // points to active palette
+
+// ════════════════════════════════════════════════════════════════════
+//  Screen-index enum  (used for bat/cpu label arrays)
+// ════════════════════════════════════════════════════════════════════
+enum ScrIdx {
+    SI_MENU = 0, SI_PRED, SI_TRAIN, SI_WORDS, SI_SPEECH,
+    SI_BOTH, SI_WEB, SI_SETTINGS, SI_TEST, SI_TEST_DETAIL,
+    SI_COUNT
+};
+
+// ════════════════════════════════════════════════════════════════════
+//  Screen objects  (defined in gui_api.cpp)
+// ════════════════════════════════════════════════════════════════════
+extern lv_obj_t *scr_splash;
+extern lv_obj_t *scr_menu;
+extern lv_obj_t *scr_predict;
+extern lv_obj_t *scr_train;
+extern lv_obj_t *scr_words;
+extern lv_obj_t *scr_speech;
+extern lv_obj_t *scr_both;
+extern lv_obj_t *scr_web;
+extern lv_obj_t *scr_settings;
+extern lv_obj_t *scr_test;
+extern lv_obj_t *scr_test_detail;
+
+// ════════════════════════════════════════════════════════════════════
+//  Widget pointers  (defined in gui_api.cpp)
+// ════════════════════════════════════════════════════════════════════
+// Gesture labels
+extern lv_obj_t *lbl_gesture_w;
+extern lv_obj_t *lbl_gesture_b;
+
+// Sensor bars — WORDS screen
+extern lv_obj_t *bar_flex[5];
+extern lv_obj_t *bar_hall[5];
+
+// Sensor bars — BOTH screen
+extern lv_obj_t *bar_flex_b[5];
+extern lv_obj_t *bar_hall_b[5];
+
+// Settings sliders & value labels
+extern lv_obj_t *slider_brightness;
+extern lv_obj_t *slider_volume;
+extern lv_obj_t *slider_sleep;
+extern lv_obj_t *lbl_brt_val;
+extern lv_obj_t *lbl_vol_val;
+extern lv_obj_t *lbl_slp_val;
+
+// Dark-mode switch & FPS dropdown
+extern lv_obj_t *sw_dark_mode;
+extern lv_obj_t *dd_fps;
+
+// About
+extern lv_obj_t *lbl_about;
+
+// Train status
+extern lv_obj_t *lbl_train_stat;
+
+// Web
+extern lv_obj_t *qr_web;
+extern lv_obj_t *lbl_web_stat;
+
+// Test detail
+extern lv_obj_t *lbl_test_detail;
+extern lv_obj_t *test_vol_row;
+extern lv_obj_t *slider_test_vol;
+extern lv_obj_t *lbl_test_vol_val;
+
+// Per-screen battery & CPU labels
+extern lv_obj_t *bat_labels[SI_COUNT];
+extern lv_obj_t *cpu_labels[SI_COUNT];
+
+// ════════════════════════════════════════════════════════════════════
+//  Styles  (defined in gui_theme.cpp)
+// ════════════════════════════════════════════════════════════════════
+extern lv_style_t sty_scr;
+extern lv_style_t sty_btn;
+extern lv_style_t sty_btn_pr;
+extern lv_style_t sty_hdr;
+
+// ════════════════════════════════════════════════════════════════════
+//  Settings / runtime state  (defined in gui_api.cpp)
+// ════════════════════════════════════════════════════════════════════
+extern uint8_t  cfg_volume;
+extern uint8_t  cfg_brightness;
+extern uint8_t  cfg_sleep_min;
+extern bool     cfg_dark_mode;
+extern uint8_t  cfg_fps;
+
+extern float    bat_voltage_v;
+extern int      bat_pct_cache;
+extern AppMode  cur_gui_mode;
+extern int      test_active;
+
+// ════════════════════════════════════════════════════════════════════
+//  External callbacks  (defined in gui_api.cpp)
+// ════════════════════════════════════════════════════════════════════
+extern void (*s_mode_cb)(AppMode);
+extern void (*s_test_speaker_cb)();
+extern void (*s_test_oled_cb)();
+extern void (*s_brightness_cb)(uint8_t);
+extern void (*s_volume_cb)(uint8_t);
+
+// ════════════════════════════════════════════════════════════════════
+//  Internal functions — theme  (gui_theme.cpp)
+// ════════════════════════════════════════════════════════════════════
+void init_styles();
+void apply_theme();
+
+// ════════════════════════════════════════════════════════════════════
+//  Internal functions — NVS  (gui_api.cpp)
+// ════════════════════════════════════════════════════════════════════
+void load_settings();
+void save_settings();
+
+// ════════════════════════════════════════════════════════════════════
+//  Internal functions — helpers  (gui_helpers.cpp)
+// ════════════════════════════════════════════════════════════════════
+lv_obj_t *mk_scr();
+lv_obj_t *mk_btn(lv_obj_t *parent, const char *text,
+                  int w, int h, lv_event_cb_t cb);
+int       mk_header(lv_obj_t *scr, ScrIdx idx,
+                     const char *title, lv_event_cb_t back_cb);
+lv_obj_t *mk_content(lv_obj_t *scr, int header_h);
+void      create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
+                      int y_start);
+
+lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
+                         const char *label, int32_t min_v, int32_t max_v,
+                         int32_t cur, lv_event_cb_t cb,
+                         lv_obj_t **val_lbl_out);
+void      mk_section(lv_obj_t *par, const char *txt);
+lv_obj_t *add_switch_row(lv_obj_t *par, const char *icon,
+                         const char *label, bool initial,
+                         lv_event_cb_t cb);
+lv_obj_t *add_dropdown_row(lv_obj_t *par, const char *icon,
+                           const char *label, const char *options,
+                           uint16_t sel, lv_event_cb_t cb);
+
+// ════════════════════════════════════════════════════════════════════
+//  Internal functions — screen builders  (gui_screens.cpp)
+// ════════════════════════════════════════════════════════════════════
+void build_splash();
+void build_menu();
+void build_predict_menu();
+void build_train();
+void build_words();
+void build_speech();
+void build_both();
+void build_web();
+void build_settings();
+void build_test();
+void build_test_detail();
+void populate_test_detail();
+
+// ════════════════════════════════════════════════════════════════════
+//  Internal functions — callbacks  (gui_callbacks.cpp)
+// ════════════════════════════════════════════════════════════════════
+void fire_mode(AppMode m);
+void nav_to(lv_obj_t *scr, bool left);
+
+// Navigation callbacks
+void cb_btn_train(lv_event_t *e);
+void cb_btn_predict(lv_event_t *e);
+void cb_btn_settings(lv_event_t *e);
+void cb_btn_words(lv_event_t *e);
+void cb_btn_speech(lv_event_t *e);
+void cb_btn_both(lv_event_t *e);
+void cb_btn_web(lv_event_t *e);
+void cb_btn_tests(lv_event_t *e);
+
+void cb_btn_back_menu(lv_event_t *e);
+void cb_btn_back_predict(lv_event_t *e);
+void cb_btn_back_tests(lv_event_t *e);
+void cb_btn_back_test_detail(lv_event_t *e);
+
+void cb_splash_timer(lv_timer_t *t);
+
+// Slider callbacks
+void cb_slider_brightness(lv_event_t *e);
+void cb_slider_volume(lv_event_t *e);
+void cb_slider_sleep(lv_event_t *e);
+void cb_slider_test_vol(lv_event_t *e);
+
+// Settings callbacks
+void cb_dark_mode_switch(lv_event_t *e);
+void cb_fps_dropdown(lv_event_t *e);
+
+// Test callbacks
+void cb_test_oled(lv_event_t *e);
+void cb_test_mpu(lv_event_t *e);
+void cb_test_flex(lv_event_t *e);
+void cb_test_hall(lv_event_t *e);
+void cb_test_battery(lv_event_t *e);
+void cb_test_speaker(lv_event_t *e);

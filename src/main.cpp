@@ -13,7 +13,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "display.h"
-#include "gui.h"
+#include "gui/gui.h"
 #include "sensors.h"
 #include "audio.h"
 #include "power.h"
