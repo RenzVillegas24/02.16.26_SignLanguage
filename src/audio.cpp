@@ -1,33 +1,66 @@
 /*
  * @file audio.cpp
  * @brief I2S audio output via MAX98357A amplifier
- *        Generates tones / plays simple audio feedback
+ *        - Volume control
+ *        - Sine-wave tone generation  (with fade envelope)
+ *        - Frequency chirp (linear sweep)
+ *        - Beep patterns
+ *        - WAV file streaming from SPIFFS
  */
 #include "audio.h"
 #include "config.h"
 #include "driver/i2s.h"
+#include "SPIFFS.h"
 #include <math.h>
 
+// ─────────────────────────────────────────────
+//  Constants
+// ─────────────────────────────────────────────
 #define I2S_PORT        I2S_NUM_0
-#define SAMPLE_RATE     22050
-#define DMA_BUF_COUNT   4
-#define DMA_BUF_LEN     256
+#define SAMPLE_RATE     44100
+#define DMA_BUF_COUNT   8
+#define DMA_BUF_LEN     1024
+#define TONE_BUF_LEN    512     // samples per chunk (mono)
 
-static bool     i2s_installed = false;
-static volatile bool playing  = false;
+// ─────────────────────────────────────────────
+//  Module State
+// ─────────────────────────────────────────────
+static bool          s_installed = false;
+static volatile bool s_playing   = false;
+static float         s_volume    = 0.5f;    // 0.0 – 1.0
+static float         s_gain      = 0.0f;    // linear gain derived from dB (set in audio_init)
 
-void audio_init() {
+// ─────────────────────────────────────────────
+//  dB-based volume → linear gain
+//  Mimics ESP-ADF ALC: volume 0.0→1.0 maps to
+//  –64 dB (silence) → 0 dB (full).
+// ─────────────────────────────────────────────
+#define ALC_DB_MIN  -64.0f
+#define ALC_DB_MAX    0.0f
+
+static float volume_to_gain(float vol) {
+    if (vol <= 0.0f) return 0.0f;
+    if (vol >= 1.0f) return 1.0f;
+    float db = ALC_DB_MIN + (ALC_DB_MAX - ALC_DB_MIN) * vol;  // –64…0
+    return powf(10.0f, db / 20.0f);   // dB → linear
+}
+
+// ─────────────────────────────────────────────
+//  Internal helpers
+// ─────────────────────────────────────────────
+static void i2s_install(uint32_t sample_rate) {
     i2s_config_t cfg = {};
     cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-    cfg.sample_rate          = SAMPLE_RATE;
+    cfg.sample_rate          = sample_rate;
     cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
-    cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;
+    cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // mono
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count        = DMA_BUF_COUNT;
     cfg.dma_buf_len          = DMA_BUF_LEN;
     cfg.use_apll             = false;
     cfg.tx_desc_auto_clear   = true;
+    cfg.fixed_mclk           = 0;
 
     i2s_pin_config_t pins = {};
     pins.bck_io_num   = I2S_BCLK;
@@ -42,35 +75,70 @@ void audio_init() {
     }
     i2s_set_pin(I2S_PORT, &pins);
     i2s_zero_dma_buffer(I2S_PORT);
-    i2s_installed = true;
+    s_installed = true;
+}
+
+// ─────────────────────────────────────────────
+//  Core API
+// ─────────────────────────────────────────────
+void audio_init() {
+    if (s_installed) return;
+    i2s_install(SAMPLE_RATE);
+    s_gain = volume_to_gain(s_volume);   // compute initial linear gain
     Serial.println("[AUDIO] I2S ready");
 }
 
+void audio_stop() {
+    s_playing = false;
+    if (s_installed) i2s_zero_dma_buffer(I2S_PORT);
+}
+
+bool audio_is_playing() { return s_playing; }
+
+// ─────────────────────────────────────────────
+//  Volume (dB-based, like ESP-ADF ALC)
+// ─────────────────────────────────────────────
+void audio_set_volume(float volume) {
+    s_volume = constrain(volume, 0.0f, 1.0f);
+    s_gain   = volume_to_gain(s_volume);
+
+    float db = ALC_DB_MIN + (ALC_DB_MAX - ALC_DB_MIN) * s_volume;
+    Serial.printf("[AUDIO] Volume %.0f%%  (%.1f dB, gain %.4f)\n",
+                  s_volume * 100.0f, db, s_gain);
+}
+
+float audio_get_volume() { return s_volume; }
+
+// ─────────────────────────────────────────────
+//  Tone Generation
+// ─────────────────────────────────────────────
 void audio_play_tone(uint16_t freq_hz, uint16_t duration_ms) {
-    if (!i2s_installed) return;
-    playing = true;
+    if (!s_installed) return;
+    s_playing = true;
 
-    uint32_t total_samples = (uint32_t)SAMPLE_RATE * duration_ms / 1000;
-    int16_t  buf[DMA_BUF_LEN];
-    uint32_t written = 0;
-    float    phase   = 0;
-    float    inc     = 2.0f * PI * freq_hz / SAMPLE_RATE;
+    const int32_t total_samples = (int32_t)SAMPLE_RATE * duration_ms / 1000;
+    const int32_t fade_samples  = SAMPLE_RATE / 50;    // 20 ms fade
+    int16_t buf[TONE_BUF_LEN];                         // mono buffer
 
-    while (written < total_samples && playing) {
-        uint32_t chunk = min((uint32_t)DMA_BUF_LEN, total_samples - written);
+    float phase     = 0.0f;
+    float phase_inc = 2.0f * PI * freq_hz / SAMPLE_RATE;
+    int32_t written = 0;
 
-        // Envelope: simple linear fade-in / fade-out (20 ms)
-        for (uint32_t i = 0; i < chunk; i++) {
+    while (written < total_samples && s_playing) {
+        int32_t chunk = min((int32_t)TONE_BUF_LEN, total_samples - written);
+
+        for (int32_t i = 0; i < chunk; i++) {
             float env = 1.0f;
-            uint32_t pos = written + i;
-            uint32_t fade_samples = SAMPLE_RATE / 50;    // 20 ms
+            int32_t pos = written + i;
             if (pos < fade_samples)
                 env = (float)pos / fade_samples;
             else if (pos > total_samples - fade_samples)
                 env = (float)(total_samples - pos) / fade_samples;
 
-            buf[i] = (int16_t)(sinf(phase) * 16000.0f * env);
-            phase += inc;
+            int16_t sample = (int16_t)(sinf(phase) * 32767.0f * s_gain * env);
+            buf[i] = sample;   // mono
+
+            phase += phase_inc;
             if (phase > 2.0f * PI) phase -= 2.0f * PI;
         }
 
@@ -78,13 +146,231 @@ void audio_play_tone(uint16_t freq_hz, uint16_t duration_ms) {
         i2s_write(I2S_PORT, buf, chunk * sizeof(int16_t), &bytes_written, portMAX_DELAY);
         written += chunk;
     }
+
     i2s_zero_dma_buffer(I2S_PORT);
-    playing = false;
+    s_playing = false;
 }
 
-void audio_stop() {
-    playing = false;
-    if (i2s_installed) i2s_zero_dma_buffer(I2S_PORT);
+void audio_play_chirp(uint16_t start_hz, uint16_t end_hz, uint16_t duration_ms) {
+    if (!s_installed) return;
+    s_playing = true;
+
+    const int32_t total_samples = (int32_t)SAMPLE_RATE * duration_ms / 1000;
+    int16_t buf[TONE_BUF_LEN];                         // mono buffer
+
+    float phase    = 0.0f;
+    int32_t written = 0;
+
+    while (written < total_samples && s_playing) {
+        int32_t chunk = min((int32_t)TONE_BUF_LEN, total_samples - written);
+
+        for (int32_t i = 0; i < chunk; i++) {
+            float progress = (float)(written + i) / total_samples;
+            float cur_freq = start_hz + (end_hz - start_hz) * progress;
+
+            int16_t sample = (int16_t)(sinf(phase) * 32767.0f * s_gain);
+            buf[i] = sample;   // mono
+
+            phase += 2.0f * PI * cur_freq / SAMPLE_RATE;
+            if (phase > 2.0f * PI) phase -= 2.0f * PI;
+        }
+
+        size_t bytes_written;
+        i2s_write(I2S_PORT, buf, chunk * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+        written += chunk;
+    }
+
+    i2s_zero_dma_buffer(I2S_PORT);
+    s_playing = false;
 }
 
-bool audio_is_playing() { return playing; }
+void audio_play_beeps(uint16_t freq_hz, uint16_t beep_ms, uint16_t pause_ms, uint8_t count) {
+    for (uint8_t i = 0; i < count; i++) {
+        audio_play_tone(freq_hz, beep_ms);
+        if (i < count - 1) delay(pause_ms);
+    }
+}
+
+// ─────────────────────────────────────────────
+//  WAV File Playback (SPIFFS)
+// ─────────────────────────────────────────────
+bool audio_play_wav(const char* filepath) {
+    if (!s_installed) return false;
+
+    File file = SPIFFS.open(filepath, "r");
+    if (!file) {
+        Serial.printf("[AUDIO] Cannot open: %s\n", filepath);
+        return false;
+    }
+
+    // ── Parse WAV header (44 bytes, standard PCM) ──
+    uint8_t hdr[44];
+    if (file.read(hdr, 44) != 44) {
+        Serial.println("[AUDIO] Invalid WAV header");
+        file.close();
+        return false;
+    }
+
+    uint16_t num_channels   = *(uint16_t*)(hdr + 22);
+    uint32_t wav_rate       = *(uint32_t*)(hdr + 24);
+    uint16_t bits_per_samp  = *(uint16_t*)(hdr + 34);
+    uint32_t data_size      = *(uint32_t*)(hdr + 40);
+    float    duration_sec   = (float)data_size / (wav_rate * num_channels * (bits_per_samp / 8));
+
+    Serial.printf("[AUDIO] WAV  %s\n", filepath);
+    Serial.printf("        %u Hz | %u ch | %u-bit | %.2f s\n",
+                  wav_rate, num_channels, bits_per_samp, duration_sec);
+
+    // ── Reconfigure I2S if sample rate differs ──
+    if (wav_rate != SAMPLE_RATE) {
+        i2s_driver_uninstall(I2S_PORT);
+        s_installed = false;
+        i2s_install(wav_rate);
+    }
+
+    // ── Stream audio data (with stereo→mono conversion & volume scaling) ──
+    const size_t BUF = 2048;
+    uint8_t* buffer = (uint8_t*)malloc(BUF);
+    int16_t* mono_buf = (int16_t*)malloc(BUF);  // for stereo→mono conversion
+    if (!buffer || !mono_buf) {
+        Serial.println("[AUDIO] malloc failed");
+        if (buffer) free(buffer);
+        if (mono_buf) free(mono_buf);
+        file.close();
+        return false;
+    }
+
+    s_playing = true;
+    uint32_t streamed   = 0;
+    int      last_pct   = -1;
+    unsigned long t0    = millis();
+
+    while (streamed < data_size && s_playing) {
+        size_t to_read   = min((uint32_t)BUF, data_size - streamed);
+        size_t bytes_got = file.read(buffer, to_read);
+        if (bytes_got == 0) break;
+
+        size_t out_bytes = 0;
+        uint8_t* out_ptr = buffer;
+
+        if (bits_per_samp == 16) {
+            int16_t* samples = (int16_t*)buffer;
+            size_t num_samples = bytes_got / 2;
+
+            if (num_channels == 2) {
+                // Stereo → Mono: average L+R channels, apply volume
+                size_t frames = num_samples / 2;
+                for (size_t f = 0; f < frames; f++) {
+                    int32_t left  = samples[f * 2];
+                    int32_t right = samples[f * 2 + 1];
+                    int32_t mixed = (left + right) / 2;
+                    mono_buf[f] = (int16_t)(mixed * s_gain);
+                }
+                out_ptr = (uint8_t*)mono_buf;
+                out_bytes = frames * sizeof(int16_t);
+            } else {
+                // Mono: just apply volume
+                for (size_t s = 0; s < num_samples; s++) {
+                    samples[s] = (int16_t)(samples[s] * s_gain);
+                }
+                out_bytes = bytes_got;
+            }
+        } else if (bits_per_samp == 8) {
+            // 8-bit unsigned PCM → 16-bit signed mono
+            size_t num_8bit = bytes_got;
+            size_t out_samples = (num_channels == 2) ? num_8bit / 2 : num_8bit;
+            
+            for (size_t i = 0; i < out_samples; i++) {
+                int32_t val;
+                if (num_channels == 2) {
+                    int32_t left  = (int32_t)buffer[i * 2] - 128;
+                    int32_t right = (int32_t)buffer[i * 2 + 1] - 128;
+                    val = (left + right) / 2;
+                } else {
+                    val = (int32_t)buffer[i] - 128;
+                }
+                mono_buf[i] = (int16_t)(val * 256 * s_gain);  // scale 8→16 bit
+            }
+            out_ptr = (uint8_t*)mono_buf;
+            out_bytes = out_samples * sizeof(int16_t);
+        } else {
+            // Unsupported bit depth, pass through
+            out_bytes = bytes_got;
+        }
+
+        size_t bytes_written;
+        i2s_write(I2S_PORT, out_ptr, out_bytes, &bytes_written, portMAX_DELAY);
+        streamed += bytes_got;
+
+        int pct = (int)(streamed * 100UL / data_size);
+        if (pct != last_pct && pct % 10 == 0) {
+            last_pct = pct;
+            Serial.printf("        %3d%%  (%lus elapsed)\n", pct, (millis() - t0) / 1000UL);
+        }
+    }
+
+    free(buffer);
+    free(mono_buf);
+    file.close();
+    
+    // Wait for DMA buffers to fully drain before stopping
+    // DMA has DMA_BUF_COUNT buffers of DMA_BUF_LEN samples each
+    // At wav_rate samples/sec, calculate drain time + small margin
+    uint32_t dma_samples = DMA_BUF_COUNT * DMA_BUF_LEN;
+    uint32_t drain_ms = (dma_samples * 1000UL) / wav_rate + 50;  // +50ms margin
+    delay(drain_ms);
+    
+    i2s_zero_dma_buffer(I2S_PORT);
+    s_playing = false;
+
+    Serial.printf("        Done  (%.1f s)\n", (millis() - t0) / 1000.0f);
+
+    // ── Restore default sample rate ──
+    if (wav_rate != SAMPLE_RATE) {
+        i2s_driver_uninstall(I2S_PORT);
+        s_installed = false;
+        i2s_install(SAMPLE_RATE);
+    }
+
+    return true;
+}
+
+void audio_play_wav_dir(const char* dirpath) {
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[AUDIO] SPIFFS mount failed");
+        return;
+    }
+
+    File root = SPIFFS.open(dirpath);
+    if (!root || !root.isDirectory()) {
+        Serial.printf("[AUDIO] Directory not found: %s\n", dirpath);
+        SPIFFS.end();
+        return;
+    }
+
+    Serial.printf("[AUDIO] Scanning %s for WAV files...\n", dirpath);
+
+    int count = 0;
+    File entry = root.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = String(entry.name());
+            name.toLowerCase();
+            if (name.endsWith(".wav")) {
+                count++;
+                String fullpath = String(dirpath) + "/" + String(entry.name());
+                Serial.printf("\n[AUDIO] Track %d — %s\n", count, fullpath.c_str());
+                audio_play_wav(fullpath.c_str());
+                delay(500);
+            }
+        }
+        entry = root.openNextFile();
+    }
+
+    if (count == 0)
+        Serial.printf("[AUDIO] No WAV files found in %s\n", dirpath);
+    else
+        Serial.printf("[AUDIO] Played %d WAV file(s)\n", count);
+
+    SPIFFS.end();
+}
