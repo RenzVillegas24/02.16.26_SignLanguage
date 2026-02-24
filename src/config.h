@@ -21,13 +21,13 @@
 #define MUX_CH_FLEX_THUMB   0
 #define MUX_CH_FLEX_INDEX   1
 #define MUX_CH_FLEX_MIDDLE  2
-#define MUX_CH_FLEX_RING    3
-#define MUX_CH_FLEX_PINKY   4
-#define MUX_CH_HALL_THUMB   5
-#define MUX_CH_HALL_INDEX   6
-#define MUX_CH_HALL_MIDDLE  7
-#define MUX_CH_HALL_RING    8
-#define MUX_CH_HALL_PINKY   9
+#define MUX_CH_FLEX_RING    6
+#define MUX_CH_FLEX_PINKY   7
+#define MUX_CH_HALL_THUMB   8
+#define MUX_CH_HALL_INDEX   9
+#define MUX_CH_HALL_MIDDLE  10
+#define MUX_CH_HALL_RING    11
+#define MUX_CH_HALL_PINKY   12
 
 #define NUM_FLEX_SENSORS    5
 #define NUM_HALL_SENSORS    5

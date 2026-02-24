@@ -147,6 +147,11 @@ void audio_play_tone(uint16_t freq_hz, uint16_t duration_ms) {
         written += chunk;
     }
 
+    // Wait for DMA buffers to drain before clearing (prevents popping)
+    uint32_t dma_samples = DMA_BUF_COUNT * DMA_BUF_LEN;
+    uint32_t drain_ms = (dma_samples * 1000UL) / SAMPLE_RATE + 20;  // +20ms margin
+    delay(drain_ms);
+
     i2s_zero_dma_buffer(I2S_PORT);
     s_playing = false;
 }
@@ -179,6 +184,11 @@ void audio_play_chirp(uint16_t start_hz, uint16_t end_hz, uint16_t duration_ms) 
         i2s_write(I2S_PORT, buf, chunk * sizeof(int16_t), &bytes_written, portMAX_DELAY);
         written += chunk;
     }
+
+    // Wait for DMA buffers to drain before clearing (prevents popping)
+    uint32_t dma_samples = DMA_BUF_COUNT * DMA_BUF_LEN;
+    uint32_t drain_ms = (dma_samples * 1000UL) / SAMPLE_RATE + 20;  // +20ms margin
+    delay(drain_ms);
 
     i2s_zero_dma_buffer(I2S_PORT);
     s_playing = false;

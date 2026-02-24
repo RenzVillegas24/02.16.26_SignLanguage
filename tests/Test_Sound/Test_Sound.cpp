@@ -84,16 +84,16 @@ void test_volume_fade() {
     Serial.println("  TEST 5: Volume Fade  (A4 @ 440 Hz)");
     Serial.println("══════════════════════════════════════\n");
 
-    Serial.println("  Fade in  (5 % → 40 %)");
-    for (float v = 0.05f; v <= 0.40f; v += 0.05f) {
+    Serial.println("  Fade in  (5 % → 100 %)");
+    for (float v = 0.05f; v <= 1.0; v += 0.05f) {
         Serial.printf("  vol = %.0f%%\n", v * 100);
         audio_set_volume(v);
         audio_play_tone(NOTE_A4, 200);
     }
     delay(200);
 
-    Serial.println("  Fade out  (40 % → 5 %)");
-    for (float v = 0.40f; v >= 0.05f; v -= 0.05f) {
+    Serial.println("  Fade out  (100 % → 5 %)");
+    for (float v = 1.0f; v >= 0.05f; v -= 0.05f) {
         Serial.printf("  vol = %.0f%%\n", v * 100);
         audio_set_volume(v);
         audio_play_tone(NOTE_A4, 200);
