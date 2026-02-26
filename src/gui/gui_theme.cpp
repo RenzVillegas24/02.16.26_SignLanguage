@@ -156,6 +156,7 @@ void apply_theme() {
     del_scr(scr_web);
     del_scr(scr_settings);
     del_scr(scr_test);
+    del_scr(scr_test_sensors);
     del_scr(scr_test_detail);
 
     // Rebuild with new palette / accent
@@ -168,6 +169,7 @@ void apply_theme() {
     build_web();
     build_settings();
     build_test();
+    build_test_sensors();
     build_test_detail();
 
     // Return to settings
