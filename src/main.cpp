@@ -76,8 +76,8 @@ static void on_volume_change(uint8_t val) {
 }
 
 static void on_test_speaker() {
-    test_sound_quick_beep();
-    Serial.println("[MAIN] Speaker test tone (via test module)");
+    test_sound_run_all();
+    Serial.println("[MAIN] Speaker test — full suite (via test_sound_module)");
 }
 
 static void on_test_oled() {

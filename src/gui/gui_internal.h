@@ -82,7 +82,7 @@ const char *accent_dropdown_opts();
 // ════════════════════════════════════════════════════════════════════
 enum ScrIdx {
     SI_MENU = 0, SI_PRED, SI_LOCAL, SI_TRAIN,
-    SI_WEB, SI_SETTINGS, SI_TEST, SI_TEST_DETAIL,
+    SI_WEB, SI_SETTINGS, SI_TEST, SI_TEST_SENSORS, SI_TEST_DETAIL,
     SI_COUNT
 };
 
@@ -97,6 +97,7 @@ extern lv_obj_t *scr_train;
 extern lv_obj_t *scr_web;
 extern lv_obj_t *scr_settings;
 extern lv_obj_t *scr_test;
+extern lv_obj_t *scr_test_sensors;
 extern lv_obj_t *scr_test_detail;
 
 // ════════════════════════════════════════════════════════════════════
@@ -136,6 +137,17 @@ extern lv_obj_t *test_brt_row;
 extern lv_obj_t *slider_test_brt;
 extern lv_obj_t *lbl_test_brt_val;
 extern lv_obj_t *btn_benchmark;
+
+// Sensor test detail bars + labels (for Flex/Hall/Hall Top screens)
+extern lv_obj_t *sensor_test_container;
+extern lv_obj_t *sensor_test_bars[5];
+extern lv_obj_t *sensor_test_lbls[5];
+
+// Calibration dialog widgets
+extern lv_obj_t *calib_overlay;
+extern lv_obj_t *calib_bar;
+extern lv_obj_t *calib_lbl;
+extern lv_obj_t *lbl_calib_info;   // Calibration status footer in sensors menu
 
 extern lv_obj_t *bat_label;
 extern lv_obj_t *cpu_label;
@@ -232,9 +244,13 @@ void build_local();
 void build_web();
 void build_settings();
 void build_test();
+void build_test_sensors();
 void build_test_detail();
 void build_status_bar();
 void populate_test_detail();
+void show_calibration_dialog();
+void hide_calibration_dialog();
+void update_calibration_progress(int pct);
 
 // ════════════════════════════════════════════════════════════════════
 //  Internal functions — callbacks
@@ -273,11 +289,13 @@ void cb_back_gesture_switch(lv_event_t *e);
 
 void cb_test_oled(lv_event_t *e);
 void cb_test_mpu(lv_event_t *e);
+void cb_test_sensors(lv_event_t *e);
 void cb_test_flex(lv_event_t *e);
 void cb_test_hall(lv_event_t *e);
 void cb_test_hall_top(lv_event_t *e);
 void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
+void cb_btn_back_test_sensors(lv_event_t *e);
 
 void cb_benchmark(lv_event_t *e);
 bool is_bench_running();

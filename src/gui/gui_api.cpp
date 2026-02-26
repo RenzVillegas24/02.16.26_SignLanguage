@@ -20,6 +20,7 @@ lv_obj_t *scr_train        = nullptr;
 lv_obj_t *scr_web          = nullptr;
 lv_obj_t *scr_settings     = nullptr;
 lv_obj_t *scr_test         = nullptr;
+lv_obj_t *scr_test_sensors = nullptr;
 lv_obj_t *scr_test_detail  = nullptr;
 
 // ════════════════════════════════════════════════════════════════════
@@ -61,6 +62,17 @@ lv_obj_t *slider_test_brt  = nullptr;
 lv_obj_t *lbl_test_brt_val = nullptr;
 lv_obj_t *btn_benchmark    = nullptr;
 
+// Sensor test detail bars + labels
+lv_obj_t *sensor_test_container = nullptr;
+lv_obj_t *sensor_test_bars[5]   = {};
+lv_obj_t *sensor_test_lbls[5]   = {};
+
+// Calibration dialog widgets
+lv_obj_t *calib_overlay    = nullptr;
+lv_obj_t *calib_bar        = nullptr;
+lv_obj_t *calib_lbl        = nullptr;
+lv_obj_t *lbl_calib_info   = nullptr;
+
 lv_obj_t *bat_label = nullptr;
 lv_obj_t *cpu_label = nullptr;
 lv_obj_t *stat_bar  = nullptr;
@@ -85,15 +97,15 @@ int      bat_pct_cache  = 100;
 AppMode  cur_gui_mode   = MODE_MENU;
 int      test_active    = -1;
 
-// Test names with LVGL symbol prefixes (emoji icons)
+// Test names (without emoji/symbol prefixes — headers will show plain text)
 const char *test_names[] = {
-    LV_SYMBOL_IMAGE        " OLED",
-    LV_SYMBOL_LOOP         " MPU6050",
-    LV_SYMBOL_MINUS        " Flex Sensor",
-    LV_SYMBOL_GPS          " Hall Effect",
-    LV_SYMBOL_GPS          " Hall Top",
-    LV_SYMBOL_BATTERY_FULL " Battery",
-    LV_SYMBOL_VOLUME_MAX   " Speaker"
+    "OLED",
+    "MPU6050",
+    "Flex Sensor",
+    "Hall Effect",
+    "Hall Top",
+    "Battery",
+    "Speaker"
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -161,6 +173,7 @@ void gui_init() {
     build_web();
     build_settings();
     build_test();
+    build_test_sensors();
     build_test_detail();
 
     lv_scr_load(scr_splash);
@@ -191,7 +204,10 @@ void gui_update(const SensorData &d) {
 }
 
 void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
-    if (cur_gui_mode != MODE_TEST || !lbl_test_detail) return;
+    // Only update the detail screen when it is actually visible
+    if (cur_gui_mode != MODE_TEST) return;
+    if (lv_scr_act() != scr_test_detail) return;
+    if (!lbl_test_detail) return;
     char buf[320];
     switch (test_active) {
     case 0:
@@ -203,16 +219,31 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         lv_label_set_text(lbl_test_detail, buf);
         break;
     case 2:
-        test_sensors_format_flex(pd, buf, sizeof(buf));
-        lv_label_set_text(lbl_test_detail, buf);
+        // Flex sensor test — update bars + labels with live data
+        if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
+            for (int i = 0; i < 5; i++) {
+                lv_bar_set_value(sensor_test_bars[i], pd.flex_pct[i], LV_ANIM_OFF);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: %+d%%", i + 1, pd.flex_pct[i]);
+            }
+        }
         break;
     case 3:
-        test_sensors_format_hall(pd, buf, sizeof(buf));
-        lv_label_set_text(lbl_test_detail, buf);
+        // Hall effect side test — update bars + labels
+        if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
+            for (int i = 0; i < 5; i++) {
+                lv_bar_set_value(sensor_test_bars[i], pd.hall_pct[i], LV_ANIM_OFF);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: %+d%%", i + 1, pd.hall_pct[i]);
+            }
+        }
         break;
     case 4:
-        test_sensors_format_hall_top(pd, buf, sizeof(buf));
-        lv_label_set_text(lbl_test_detail, buf);
+        // Hall effect top test — update bars + labels
+        if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
+            for (int i = 0; i < 5; i++) {
+                lv_bar_set_value(sensor_test_bars[i], pd.hall_top_pct[i], LV_ANIM_OFF);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: %+d%%", i + 1, pd.hall_top_pct[i]);
+            }
+        }
         break;
     case 5: {
         char vbuf[120];
@@ -372,3 +403,28 @@ void gui_register_test_speaker_cb(void (*cb)())        { s_test_speaker_cb = cb;
 void gui_register_test_oled_cb(void (*cb)())           { s_test_oled_cb = cb; }
 void gui_register_brightness_cb(void (*cb)(uint8_t))   { s_brightness_cb = cb; }
 void gui_register_volume_cb(void (*cb)(uint8_t))       { s_volume_cb = cb; }
+
+// ════════════════════════════════════════════════════════════════════
+//  Calibration UI
+// ════════════════════════════════════════════════════════════════════
+static bool s_calibrating = false;
+
+void gui_update_calibration_progress(int pct) {
+    update_calibration_progress(pct);
+    if (pct >= 100) {
+        s_calibrating = false;
+        hide_calibration_dialog();
+        if (lbl_calib_info) {
+            lv_label_set_text(lbl_calib_info,
+                LV_SYMBOL_OK " Calibration complete!\n"
+                "Sensors ready for testing.\n"
+                "Baseline values stored.");
+        }
+    } else {
+        s_calibrating = true;
+    }
+}
+
+bool gui_is_calibrating() {
+    return s_calibrating;
+}

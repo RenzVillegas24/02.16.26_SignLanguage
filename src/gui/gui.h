@@ -38,6 +38,10 @@ void gui_update_about(const SystemInfoData &info);
 // Tests — update live data on test screen (with processed sensor data)
 void gui_test_update(const SensorData &d, const ProcessedSensorData &pd);
 
+// Calibration UI control
+void gui_update_calibration_progress(int pct);
+bool gui_is_calibrating();
+
 // Mode callback registration
 void gui_register_mode_callback(void (*cb)(AppMode));
 

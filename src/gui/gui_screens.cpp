@@ -244,15 +244,86 @@ void build_test() {
 
     lv_obj_t *cont = mk_content(scr_test, hh);
 
-    mk_nav_btn(cont, LV_SYMBOL_IMAGE          " OLED",         cb_test_oled);
-    mk_nav_btn(cont, LV_SYMBOL_LOOP           " MPU6050",      cb_test_mpu);
-    mk_nav_btn(cont, LV_SYMBOL_MINUS          " Flex Sensor",  cb_test_flex);
-    mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Effect",  cb_test_hall);
-    mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Top",     cb_test_hall_top);
-    mk_nav_btn(cont, LV_SYMBOL_BATTERY_FULL   " Battery",      cb_test_battery);
-    mk_nav_btn(cont, LV_SYMBOL_VOLUME_MAX     " Speaker",      cb_test_speaker);
+    mk_nav_btn(cont, LV_SYMBOL_IMAGE          " OLED",     cb_test_oled);
+    mk_nav_btn(cont, LV_SYMBOL_LIST           " Sensors",  cb_test_sensors);
+    mk_nav_btn(cont, LV_SYMBOL_BATTERY_FULL   " Battery",  cb_test_battery);
+    mk_nav_btn(cont, LV_SYMBOL_VOLUME_MAX     " Speaker",  cb_test_speaker);
 
     add_back_gesture(scr_test, cb_btn_back_tests);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Sensors submenu  (Flex, Hall Effect, Hall Top — with calibration)
+// ════════════════════════════════════════════════════════════════════
+void build_test_sensors() {
+    scr_test_sensors = mk_scr();
+    int hh = mk_header(scr_test_sensors, "Sensors", cb_btn_back_test_sensors);
+
+    lv_obj_t *cont = mk_content(scr_test_sensors, hh);
+
+    mk_nav_btn(cont, LV_SYMBOL_LOOP   " MPU6050",      cb_test_mpu);
+    mk_nav_btn(cont, LV_SYMBOL_MINUS  " Flex Sensor",  cb_test_flex);
+    mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Effect",  cb_test_hall);
+    mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Top",     cb_test_hall_top);
+ 
+    // Calibration info footer
+    mk_section(cont, "CALIBRATION");
+    lv_obj_t *cbox = lv_obj_create(cont);
+    lv_obj_set_size(cbox, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(cbox, tc->about_bg, 0);
+    lv_obj_set_style_bg_opa(cbox, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cbox, 10, 0);
+    lv_obj_set_style_border_width(cbox, 0, 0);
+    lv_obj_set_style_pad_all(cbox, 10, 0);
+    lv_obj_clear_flag(cbox, LV_OBJ_FLAG_SCROLLABLE);
+
+    lbl_calib_info = lv_label_create(cbox);
+    lv_label_set_text(lbl_calib_info, "Calibrating sensors...\nPlease wait.");
+    lv_obj_set_style_text_font(lbl_calib_info, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_calib_info, tc->about_text, 0);
+    lv_obj_set_width(lbl_calib_info, BTN_W - 24);
+    lv_label_set_long_mode(lbl_calib_info, LV_LABEL_LONG_WRAP);
+
+    add_back_gesture(scr_test_sensors, cb_btn_back_test_sensors);
+
+    // Build calibration overlay (hidden by default, shown on screen load)
+    calib_overlay = lv_obj_create(scr_test_sensors);
+    lv_obj_set_size(calib_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(calib_overlay, 0, 0);
+    lv_obj_set_style_bg_color(calib_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(calib_overlay, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(calib_overlay, 0, 0);
+    lv_obj_clear_flag(calib_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dialog = lv_obj_create(calib_overlay);
+    lv_obj_set_size(dialog, BTN_W, 140);
+    lv_obj_align(dialog, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(dialog, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(dialog, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dialog, 16, 0);
+    lv_obj_set_style_border_width(dialog, 0, 0);
+    lv_obj_set_style_pad_all(dialog, 16, 0);
+    lv_obj_clear_flag(dialog, LV_OBJ_FLAG_SCROLLABLE);
+
+    calib_lbl = lv_label_create(dialog);
+    lv_label_set_text(calib_lbl, LV_SYMBOL_REFRESH " Calibrating...\n\nKeep hand flat, no magnets.");
+    lv_obj_set_style_text_font(calib_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(calib_lbl, tc->card_text, 0);
+    lv_obj_set_style_text_align(calib_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(calib_lbl, BTN_W - 32);
+    lv_obj_align(calib_lbl, LV_ALIGN_TOP_MID, 0, 0);
+
+    calib_bar = lv_bar_create(dialog);
+    lv_obj_set_size(calib_bar, BTN_W - 48, 12);
+    lv_obj_align(calib_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_bar_set_range(calib_bar, 0, 100);
+    lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(calib_bar, tc->slider_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(calib_bar, accent_primary(), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(calib_bar, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(calib_bar, 6, LV_PART_INDICATOR);
+
+    lv_obj_add_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -355,6 +426,40 @@ void build_test_detail() {
     lv_obj_set_style_pad_all(slider_test_vol, 4, LV_PART_KNOB);
     lv_obj_add_event_cb(slider_test_vol, cb_slider_test_vol, LV_EVENT_VALUE_CHANGED, NULL);
 
+    // ── Sensor test bars container (hidden by default, shown for Flex/Hall/HallTop) ──
+    sensor_test_container = lv_obj_create(cont);
+    lv_obj_set_size(sensor_test_container, BTN_W, 5 * 44 + 8);
+    lv_obj_set_style_bg_color(sensor_test_container, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(sensor_test_container, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(sensor_test_container, 10, 0);
+    lv_obj_set_style_border_width(sensor_test_container, 0, 0);
+    lv_obj_set_style_pad_all(sensor_test_container, 8, 0);
+    lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+
+    // Create 5 sensor rows with label + bar
+    for (int i = 0; i < 5; i++) {
+        int row_y = i * 44;
+
+        // Label (e.g., "Sensor 1: +45%")
+        sensor_test_lbls[i] = lv_label_create(sensor_test_container);
+        lv_label_set_text_fmt(sensor_test_lbls[i], "Sensor %d: 0%%", i + 1);
+        lv_obj_set_style_text_font(sensor_test_lbls[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(sensor_test_lbls[i], tc->card_text, 0);
+        lv_obj_set_pos(sensor_test_lbls[i], 0, row_y);
+
+        // Bar (-100 to +100 mapped to 0-200 range)
+        sensor_test_bars[i] = lv_bar_create(sensor_test_container);
+        lv_obj_set_size(sensor_test_bars[i], BTN_W - 20, 14);
+        lv_obj_set_pos(sensor_test_bars[i], 0, row_y + 22);
+        lv_bar_set_range(sensor_test_bars[i], -100, 100);
+        lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(sensor_test_bars[i], tc->bar_bg, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(sensor_test_bars[i], accent_primary(), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(sensor_test_bars[i], 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(sensor_test_bars[i], 4, LV_PART_INDICATOR);
+    }
+
     add_back_gesture(scr_test_detail, cb_btn_back_test_detail);
 }
 
@@ -374,6 +479,7 @@ void populate_test_detail() {
     lv_obj_add_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
 
     switch (t) {
     case 0:
@@ -402,26 +508,34 @@ void populate_test_detail() {
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     case 2:
-        lv_label_set_text(lbl_test_detail,
-            "Flex Sensor Test\n\n"
-            "Reading channels...\n"
-            "Bend each finger to test.");
+        lv_label_set_text(lbl_test_detail, "Flex Sensor Test\nBend each finger to test.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
+        // Show sensor bars for Flex
+        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 5; i++) {
+            lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: 0%%", i + 1);
+            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        }
         break;
     case 3:
-        lv_label_set_text(lbl_test_detail,
-            "Hall Effect (side) Test\n\n"
-            "Reading channels...\n"
-            "Move magnets near sensors.");
+        lv_label_set_text(lbl_test_detail, "Hall Effect (side) Test\nMove magnets near sensors.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
+        // Show sensor bars for Hall
+        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 5; i++) {
+            lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: 0%%", i + 1);
+            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        }
         break;
     case 4:
-        lv_label_set_text(lbl_test_detail,
-            "Hall Effect (top) Test\n\n"
-            "Reading channels...\n"
-            "Top-of-finger sensors.\n"
-            "(Placeholder calibration)");
+        lv_label_set_text(lbl_test_detail, "Hall Effect (top) Test\nTop-of-finger sensors.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
+        // Show sensor bars for Hall Top
+        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 5; i++) {
+            lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: 0%%", i + 1);
+            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        }
         break;
     case 5: {
         char buf[160];
@@ -439,7 +553,9 @@ void populate_test_detail() {
     case 6:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n\n"
-            "Playing tone...\n"
+            "Running full audio suite:\n"
+            "Musical scale, sweeps,\n"
+            "alarms, melody, WAV...\n\n"
             "Adjust volume below.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         // Show speaker volume control
@@ -451,5 +567,31 @@ void populate_test_detail() {
     default:
         lv_label_set_text(lbl_test_detail, "Unknown test");
         break;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Calibration dialog helpers
+// ════════════════════════════════════════════════════════════════════
+void show_calibration_dialog() {
+    if (calib_overlay) {
+        lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
+        lv_label_set_text(calib_lbl, LV_SYMBOL_REFRESH " Calibrating...\n\nKeep hand flat, no magnets.");
+        lv_obj_clear_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void hide_calibration_dialog() {
+    if (calib_overlay) {
+        lv_obj_add_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void update_calibration_progress(int pct) {
+    if (calib_bar) {
+        lv_bar_set_value(calib_bar, pct, LV_ANIM_ON);
+    }
+    if (pct >= 100 && calib_lbl) {
+        lv_label_set_text(calib_lbl, LV_SYMBOL_OK " Calibration Complete!\n\nReady to test sensors.");
     }
 }

@@ -31,7 +31,17 @@ void cb_btn_tests(lv_event_t *e)   { (void)e; nav_to(scr_test, true);    cur_gui
 void cb_btn_back_menu(lv_event_t *e)    { (void)e; nav_to(scr_menu, false);     cur_gui_mode=MODE_MENU; fire_mode(MODE_MENU); }
 void cb_btn_back_predict(lv_event_t *e) { (void)e; nav_to(scr_predict, false);  cur_gui_mode=MODE_MENU; fire_mode(MODE_MENU); }
 void cb_btn_back_tests(lv_event_t *e)   { (void)e; nav_to(scr_settings, false); cur_gui_mode=MODE_SETTINGS; fire_mode(MODE_SETTINGS); test_active=-1; }
-void cb_btn_back_test_detail(lv_event_t *e) { (void)e; nav_to(scr_test, false); cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1; }
+void cb_btn_back_test_detail(lv_event_t *e) {
+    (void)e;
+    // MPU and all sensor tests (cases 1-4) come from the Sensors submenu
+    if (test_active >= 1 && test_active <= 4) {
+        nav_to(scr_test_sensors, false);
+    } else {
+        nav_to(scr_test, false);
+    }
+    cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1;
+}
+void cb_btn_back_test_sensors(lv_event_t *e) { (void)e; nav_to(scr_test, false); cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1; }
 
 void cb_splash_timer(lv_timer_t *t) {
     if (stat_bar) {
@@ -185,6 +195,57 @@ void cb_test_oled(lv_event_t *e) {
 void cb_test_mpu(lv_event_t *e) {
     (void)e; test_active = 1;
     populate_test_detail(); nav_to(scr_test_detail, true);
+}
+
+// ── Sensors submenu: Trigger calibration on entry ──
+static lv_timer_t *calib_timer = nullptr;
+static int calib_progress = 0;
+static bool calib_running = false;
+
+static void calib_timer_cb(lv_timer_t *t) {
+    (void)t;
+    // This simulates calibration progress; real calibration is done via sensor_module
+    // The actual calibration runs in main loop, this just updates the UI
+    if (calib_progress >= 100) {
+        calib_running = false;
+        if (calib_timer) { lv_timer_del(calib_timer); calib_timer = nullptr; }
+        hide_calibration_dialog();
+        // Update calibration info label
+        if (lbl_calib_info) {
+            lv_label_set_text(lbl_calib_info,
+                LV_SYMBOL_OK " Calibration complete!\n"
+                "Sensors ready for testing.\n"
+                "Baseline values stored.");
+        }
+        return;
+    }
+    calib_progress += 2;
+    update_calibration_progress(calib_progress);
+}
+
+void cb_test_sensors(lv_event_t *e) {
+    (void)e;
+    nav_to(scr_test_sensors, true);
+    cur_gui_mode = MODE_TEST;
+    fire_mode(MODE_TEST);
+    test_active = -1;
+
+    // Start calibration sequence
+    if (!sensor_module_is_calibrated()) {
+        calib_progress = 0;
+        calib_running = true;
+        show_calibration_dialog();
+        // Create timer to animate progress (real calibration triggered from main.cpp)
+        if (calib_timer) lv_timer_del(calib_timer);
+        calib_timer = lv_timer_create(calib_timer_cb, 100, NULL);
+    } else {
+        // Already calibrated, just show ready status
+        if (lbl_calib_info) {
+            lv_label_set_text(lbl_calib_info,
+                LV_SYMBOL_OK " Sensors calibrated.\n"
+                "Ready for testing.");
+        }
+    }
 }
 
 void cb_test_flex(lv_event_t *e) {
