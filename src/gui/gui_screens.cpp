@@ -67,7 +67,11 @@ void build_train() {
         "Connect Edge Impulse\n"
         "Data Forwarder via USB.\n\n"
         "Sensor data streams over\n"
-        "Serial at 115200 baud.");
+        "Serial at 115200 baud.\n\n"
+        "23 features per sample:\n"
+        "5 flex, 5 hall, 5 hall-top\n"
+        "accel(3), gyro(3),\n"
+        "pitch, roll");
     lv_obj_set_style_text_font(info, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(info, tc->sub_text, 0);
     lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);

@@ -91,12 +91,14 @@ static void on_test_oled() {
 //  Edge Impulse serial streaming (TRAIN mode)
 // ════════════════════════════════════════════════════════════════════
 static void train_serial_output() {
-    // Format: flex0,..,flex4,hall0,..,hall4,hall_top0,..,hall_top4,ax,ay,az,gx,gy,gz
+    // Format: flex0,..,flex4,hall0,..,hall4,hall_top0,..,hall_top4,ax,ay,az,gx,gy,gz,pitch,roll
+    // 23 features: 5 flex + 5 hall + 5 hall_top + 3 accel + 3 gyro + pitch + roll
     Serial.printf("%u,%u,%u,%u,%u,"
                   "%u,%u,%u,%u,%u,"
                   "%u,%u,%u,%u,%u,"
                   "%.2f,%.2f,%.2f,"
-                  "%.2f,%.2f,%.2f\n",
+                  "%.2f,%.2f,%.2f,"
+                  "%.2f,%.2f\n",
         sensor_data.flex[0], sensor_data.flex[1], sensor_data.flex[2],
         sensor_data.flex[3], sensor_data.flex[4],
         sensor_data.hall[0], sensor_data.hall[1], sensor_data.hall[2],
@@ -104,7 +106,8 @@ static void train_serial_output() {
         sensor_data.hall_top[0], sensor_data.hall_top[1], sensor_data.hall_top[2],
         sensor_data.hall_top[3], sensor_data.hall_top[4],
         sensor_data.accel_x, sensor_data.accel_y, sensor_data.accel_z,
-        sensor_data.gyro_x,  sensor_data.gyro_y,  sensor_data.gyro_z);
+        sensor_data.gyro_x,  sensor_data.gyro_y,  sensor_data.gyro_z,
+        sensor_data.pitch,   sensor_data.roll);
 }
 
 // ════════════════════════════════════════════════════════════════════
