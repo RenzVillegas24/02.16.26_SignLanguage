@@ -6,6 +6,7 @@
 #include "gui_internal.h"
 #include "sensor_module/sensor_module.h"
 #include "test_sound_module.h"
+#include "audio.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Helpers
@@ -206,11 +207,6 @@ static volatile bool calib_done_flag = false;
 static lv_timer_t   *calib_poll_timer = nullptr;
 static TaskHandle_t  calib_task_handle = nullptr;
 
-// Speaker test — run on FreeRTOS task to avoid blocking GUI
-static volatile bool  speaker_running   = false;
-static volatile bool  speaker_done_flag = false;
-static TaskHandle_t   speaker_task_handle = nullptr;
-
 // Progress callback called FROM the calibration FreeRTOS task (NOT LVGL-safe)
 static void calib_progress_cb(int pct) {
     calib_progress = pct;
@@ -263,13 +259,124 @@ static void start_real_calibration() {
     calib_poll_timer = lv_timer_create(calib_poll_timer_cb, 100, nullptr);
 }
 
-// FreeRTOS task for speaker test
+// ════════════════════════════════════════════════════════════════════
+//  Speaker test — step-by-step FreeRTOS task with pause/stop
+// ════════════════════════════════════════════════════════════════════
+#define SPK_NUM_STEPS 9
+
+struct SpeakerStep {
+    const char *name;
+    void (*fn)();
+};
+
+static const SpeakerStep s_spk_steps[SPK_NUM_STEPS] = {
+    {"Musical Scale",         test_sound_musical_scale},
+    {"Frequency Sweep",       test_sound_frequency_sweep},
+    {"Alarm Patterns",        test_sound_alarm_patterns},
+    {"Frequency Steps",       test_sound_frequency_steps},
+    {"Volume Fade",           test_sound_volume_fade},
+    {"Melody",                test_sound_melody},
+    {"Extreme Frequencies",   test_sound_extreme_frequencies},
+    {"Rapid Jumps",           test_sound_rapid_jumps},
+    {"WAV Playback",          test_sound_wav_playback},
+};
+
+// Volatile state — written by task, read by LVGL poll timer
+volatile int   spk_step_idx   = 0;
+volatile int   spk_num_steps  = SPK_NUM_STEPS;
+volatile bool  spk_paused     = false;
+volatile bool  spk_running    = false;
+volatile bool  spk_done_flag  = false;
+volatile bool  spk_stop_req   = false;
+
+// Names array read by refresh_spk_panel() in gui_api.cpp
+const char *spk_step_names[SPK_NUM_STEPS];
+
+static lv_timer_t  *spk_poll_timer   = nullptr;
+static TaskHandle_t spk_task_handle  = nullptr;
+
+static void spk_poll_timer_cb(lv_timer_t *t) {
+    (void)t;
+    refresh_spk_panel();
+
+    if (spk_done_flag || spk_stop_req) {
+        if (spk_poll_timer) { lv_timer_del(spk_poll_timer); spk_poll_timer = nullptr; }
+        refresh_spk_panel();   // one final update
+    }
+}
+
 static void speaker_task_fn(void *param) {
     (void)param;
-    test_sound_run_all();
-    speaker_done_flag = true;
-    speaker_task_handle = nullptr;
+    float saved_vol = audio_get_volume();
+
+    for (int i = 0; i < SPK_NUM_STEPS; i++) {
+        if (spk_stop_req) break;
+
+        // Wait while paused
+        while (spk_paused && !spk_stop_req) { vTaskDelay(pdMS_TO_TICKS(50)); }
+        if (spk_stop_req) break;
+
+        spk_step_idx = i;
+        Serial.printf("\n[SPK] Step %d/%d: %s\n", i + 1, SPK_NUM_STEPS, s_spk_steps[i].name);
+        s_spk_steps[i].fn();
+
+        // Brief pause between tests (also allows stop to be caught)
+        for (int w = 0; w < 10 && !spk_stop_req; w++) vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    audio_set_volume(saved_vol);
+    audio_set_poll(nullptr);      // clear the pause/stop hook
+    spk_running   = false;
+    spk_done_flag = !spk_stop_req;
+    spk_stop_req  = false;
+    spk_task_handle = nullptr;
     vTaskDelete(nullptr);
+}
+
+static void start_speaker_test() {
+    if (spk_running) return;
+
+    // Populate step names (const pointer array used by refresh_spk_panel)
+    for (int i = 0; i < SPK_NUM_STEPS; i++)
+        spk_step_names[i] = s_spk_steps[i].name;
+
+    spk_step_idx  = 0;
+    spk_paused    = false;
+    spk_stop_req  = false;
+    spk_done_flag = false;
+    spk_running   = true;
+
+    // Register the audio poll hook — called every DMA chunk (~12 ms).
+    // Blocks inside audio loops while paused; returns true to abort on stop.
+    audio_set_poll([]() -> bool {
+        while (spk_paused && !spk_stop_req)
+            vTaskDelay(pdMS_TO_TICKS(10));
+        return (bool)spk_stop_req;
+    });
+
+    xTaskCreatePinnedToCore(speaker_task_fn, "spk", 4096, nullptr, 1,
+                            &spk_task_handle, 1);
+
+    if (spk_poll_timer) lv_timer_del(spk_poll_timer);
+    spk_poll_timer = lv_timer_create(spk_poll_timer_cb, 200, nullptr);
+}
+
+void cb_spk_pause(lv_event_t *e) {
+    (void)e;
+    if (!spk_running) {
+        // Not yet started — kick it off (Play button first press)
+        start_speaker_test();
+    } else {
+        spk_paused = !spk_paused;
+    }
+    refresh_spk_panel();
+}
+
+void cb_spk_stop(lv_event_t *e) {
+    (void)e;
+    spk_stop_req = true;
+    spk_paused   = false;   // unblock if paused
+    refresh_spk_panel();
 }
 
 void cb_test_sensors(lv_event_t *e) {
@@ -311,14 +418,14 @@ void cb_test_battery(lv_event_t *e) {
 void cb_test_speaker(lv_event_t *e) {
     (void)e; test_active = 6;
     populate_test_detail(); nav_to(scr_test_detail, true);
-
-    // Run speaker test on a FreeRTOS task to avoid blocking the GUI
-    if (!speaker_running) {
-        speaker_running   = true;
-        speaker_done_flag = false;
-        xTaskCreatePinnedToCore(speaker_task_fn, "spk_test", 4096, nullptr, 1,
-                                &speaker_task_handle, 1);
-    }
+    // Test starts when the user taps the Play button (cb_spk_pause)
+    // Reset state so the panel shows "Tap Play to start"
+    spk_step_idx  = 0;
+    spk_done_flag = false;
+    spk_running   = false;
+    spk_paused    = false;
+    spk_stop_req  = false;
+    refresh_spk_panel();
 }
 
 // ════════════════════════════════════════════════════════════════════

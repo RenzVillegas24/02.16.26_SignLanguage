@@ -150,6 +150,13 @@ extern lv_obj_t *calib_lbl;
 extern lv_obj_t *lbl_calib_info;   // Calibration status footer in sensors menu
 extern lv_obj_t *btn_calibrate;    // Calibrate button in sensors menu
 
+// Speaker test panel widgets (shown in test_detail for case 6)
+extern lv_obj_t *spk_panel;        // Container — hidden except for speaker test
+extern lv_obj_t *lbl_spk_step;     // "Test 3/9: Volume Fade"
+extern lv_obj_t *spk_prog_bar;     // 0-9 overall progress
+extern lv_obj_t *btn_spk_pause;    // Pause / Resume toggle
+extern lv_obj_t *btn_spk_stop;     // Stop
+
 extern lv_obj_t *bat_label;
 extern lv_obj_t *cpu_label;
 extern lv_obj_t *stat_bar;
@@ -298,9 +305,14 @@ void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 void cb_btn_back_test_sensors(lv_event_t *e);
 void cb_calibrate(lv_event_t *e);
+void cb_spk_pause(lv_event_t *e);
+void cb_spk_stop(lv_event_t *e);
 
 void cb_benchmark(lv_event_t *e);
 bool is_bench_running();
 
 // Calibration info helper — updates lbl_calib_info with real values
 void refresh_calib_info_label();
+
+// Speaker test helper — updates spk_panel widgets from current state
+void refresh_spk_panel();

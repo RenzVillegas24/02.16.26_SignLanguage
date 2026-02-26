@@ -29,6 +29,9 @@ static bool          s_installed = false;
 static volatile bool s_playing   = false;
 static float         s_volume    = 0.5f;    // 0.0 – 1.0
 static float         s_gain      = 0.0f;    // linear gain derived from dB (set in audio_init)
+static audio_poll_fn s_poll_fn   = nullptr; // optional per-chunk interrupt/pause hook
+
+void audio_set_poll(audio_poll_fn fn) { s_poll_fn = fn; }
 
 // ─────────────────────────────────────────────
 //  dB-based volume → linear gain
@@ -125,6 +128,9 @@ void audio_play_tone(uint16_t freq_hz, uint16_t duration_ms) {
     int32_t written = 0;
 
     while (written < total_samples && s_playing) {
+        // Poll hook: returns true → abort; may also block internally while paused
+        if (s_poll_fn && s_poll_fn()) break;
+
         int32_t chunk = min((int32_t)TONE_BUF_LEN, total_samples - written);
 
         for (int32_t i = 0; i < chunk; i++) {
@@ -167,6 +173,9 @@ void audio_play_chirp(uint16_t start_hz, uint16_t end_hz, uint16_t duration_ms) 
     int32_t written = 0;
 
     while (written < total_samples && s_playing) {
+        // Poll hook: returns true → abort; may also block internally while paused
+        if (s_poll_fn && s_poll_fn()) break;
+
         int32_t chunk = min((int32_t)TONE_BUF_LEN, total_samples - written);
 
         for (int32_t i = 0; i < chunk; i++) {
@@ -256,6 +265,9 @@ bool audio_play_wav(const char* filepath) {
     unsigned long t0    = millis();
 
     while (streamed < data_size && s_playing) {
+        // Poll hook: returns true → abort; may also block internally while paused
+        if (s_poll_fn && s_poll_fn()) break;
+
         size_t to_read   = min((uint32_t)BUF, data_size - streamed);
         size_t bytes_got = file.read(buffer, to_read);
         if (bytes_got == 0) break;

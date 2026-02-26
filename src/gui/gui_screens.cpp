@@ -469,6 +469,61 @@ void build_test_detail() {
         lv_obj_set_style_radius(sensor_test_bars[i], 4, LV_PART_INDICATOR);
     }
 
+    // ── Speaker test panel (hidden by default, shown for speaker test) ──
+    spk_panel = lv_obj_create(cont);
+    lv_obj_set_size(spk_panel, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(spk_panel, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(spk_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(spk_panel, 10, 0);
+    lv_obj_set_style_border_width(spk_panel, 0, 0);
+    lv_obj_set_style_pad_all(spk_panel, 12, 0);
+    lv_obj_set_style_pad_row(spk_panel, 10, 0);
+    lv_obj_set_layout(spk_panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(spk_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(spk_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(spk_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(spk_panel, LV_OBJ_FLAG_HIDDEN);
+
+    // Step label ("Test 1/9: Musical Scale")
+    lbl_spk_step = lv_label_create(spk_panel);
+    lv_label_set_text(lbl_spk_step, "Tap Play to start...");
+    lv_obj_set_style_text_font(lbl_spk_step, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_spk_step, tc->card_text, 0);
+    lv_obj_set_width(lbl_spk_step, BTN_W - 24);
+    lv_label_set_long_mode(lbl_spk_step, LV_LABEL_LONG_WRAP);
+
+    // Progress bar (0 to 9)
+    spk_prog_bar = lv_bar_create(spk_panel);
+    lv_obj_set_size(spk_prog_bar, BTN_W - 24, 12);
+    lv_bar_set_range(spk_prog_bar, 0, 9);
+    lv_bar_set_value(spk_prog_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(spk_prog_bar, tc->slider_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(spk_prog_bar, accent_primary(), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(spk_prog_bar, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(spk_prog_bar, 6, LV_PART_INDICATOR);
+
+    // Button row: [Pause/Resume] [Stop]
+    lv_obj_t *spk_btn_row = lv_obj_create(spk_panel);
+    lv_obj_set_size(spk_btn_row, BTN_W - 24, 44);
+    lv_obj_set_style_bg_opa(spk_btn_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(spk_btn_row, 0, 0);
+    lv_obj_set_style_pad_all(spk_btn_row, 0, 0);
+    lv_obj_clear_flag(spk_btn_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    int half = (BTN_W - 24 - 8) / 2;
+
+    btn_spk_pause = mk_btn(spk_btn_row, LV_SYMBOL_PLAY " Play", BTN_W - 24, 44, cb_spk_pause);
+    lv_obj_set_pos(btn_spk_pause, 0, 0);
+    lv_obj_set_style_bg_color(btn_spk_pause, accent_dark(), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_spk_pause, 0), &lv_font_montserrat_16, 0);
+
+    btn_spk_stop = mk_btn(spk_btn_row, LV_SYMBOL_STOP " Stop", half, 44, cb_spk_stop);
+    lv_obj_set_pos(btn_spk_stop, half + 8, 0);
+    lv_obj_set_style_bg_color(btn_spk_stop, lv_color_make(0xAA, 0x22, 0x22), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_spk_stop, 0), &lv_font_montserrat_16, 0);
+    // Hidden by default — shown only while test is running (refresh_spk_panel controls this)
+    lv_obj_add_flag(btn_spk_stop, LV_OBJ_FLAG_HIDDEN);
+
     add_back_gesture(scr_test_detail, cb_btn_back_test_detail);
 }
 
@@ -489,6 +544,7 @@ void populate_test_detail() {
     lv_obj_add_flag(test_brt_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(btn_benchmark, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(spk_panel, LV_OBJ_FLAG_HIDDEN);
 
     switch (t) {
     case 0:
@@ -573,13 +629,12 @@ void populate_test_detail() {
     }
     case 6:
         lv_label_set_text(lbl_test_detail,
-            "Speaker Test\n\n"
-            LV_SYMBOL_VOLUME_MAX " Running audio suite:\n"
-            "Musical scale, sweeps,\n"
-            "alarms, melody, WAV...\n\n"
+            "Speaker Test\n"
+            "9 audio tests in sequence.\n"
             "Adjust volume below.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
-        // Show speaker volume control
+        // Show speaker controls
+        lv_obj_clear_flag(spk_panel, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(test_vol_row, LV_OBJ_FLAG_HIDDEN);
         lv_slider_set_value(slider_test_vol, cfg_volume, LV_ANIM_OFF);
         { char vb[8]; snprintf(vb, sizeof(vb), "%d", cfg_volume);

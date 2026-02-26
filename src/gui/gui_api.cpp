@@ -74,6 +74,13 @@ lv_obj_t *calib_lbl        = nullptr;
 lv_obj_t *lbl_calib_info   = nullptr;
 lv_obj_t *btn_calibrate    = nullptr;
 
+// Speaker test panel widgets
+lv_obj_t *spk_panel        = nullptr;
+lv_obj_t *lbl_spk_step     = nullptr;
+lv_obj_t *spk_prog_bar     = nullptr;
+lv_obj_t *btn_spk_pause    = nullptr;
+lv_obj_t *btn_spk_stop     = nullptr;
+
 lv_obj_t *bat_label = nullptr;
 lv_obj_t *cpu_label = nullptr;
 lv_obj_t *stat_bar  = nullptr;
@@ -262,26 +269,21 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         break;
     }
     case 6:
-        // Speaker test — show running/done status
-        // Note: speaker_running is extern volatile in gui_callbacks.cpp
-        // We check via gui_is_speaker_running() (we'll just show a static message
-        // and let the user adjust volume while it plays)
-        lv_label_set_text(lbl_test_detail,
-            "Speaker Test\n\n"
-            LV_SYMBOL_VOLUME_MAX " Audio suite running...\n"
-            "Musical scale, sweeps,\n"
-            "alarms, melody, WAV.\n\n"
-            "Adjust volume below.");
+        // Speaker test UI is updated via the poll timer in gui_callbacks.cpp
+        // gui_test_update is called from the loop — just refresh the panel here
+        refresh_spk_panel();
         break;
     default:
         break;
     }
 
-    // Also dump to Serial for diagnostics
-    static uint32_t last_serial = 0;
-    if (millis() - last_serial >= 500) {
-        last_serial = millis();
-        sensor_module_print_serial(pd);
+    // Dump sensor data to Serial only for sensor/IMU tests
+    if (test_active >= 1 && test_active <= 4) {
+        static uint32_t last_serial = 0;
+        if (millis() - last_serial >= 500) {
+            last_serial = millis();
+            sensor_module_print_serial(pd);
+        }
     }
 }
 
@@ -485,4 +487,89 @@ void refresh_calib_info_label() {
     }
 
     lv_label_set_text(lbl_calib_info, buf);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Speaker panel refresh — called from gui_test_update (case 6)
+//  and from the spk poll timer.
+//  Reads extern volatile state exposed by gui_callbacks.cpp.
+// ════════════════════════════════════════════════════════════════════
+extern volatile int   spk_step_idx;   // 0-based current step
+extern volatile int   spk_num_steps;  // total steps (9)
+extern volatile bool  spk_paused;
+extern volatile bool  spk_running;
+extern volatile bool  spk_done_flag;
+extern const char    *spk_step_names[];
+
+void refresh_spk_panel() {
+    if (!spk_panel) return;
+
+    int step  = spk_step_idx;
+    int total = spk_num_steps;
+    bool paused  = spk_paused;
+    bool running = spk_running;
+    bool done    = spk_done_flag;
+
+    // Full row width and half-width for when both buttons are visible
+    const int row_w = BTN_W - 24;
+    const int half  = (row_w - 8) / 2;
+
+    // Progress bar
+    if (spk_prog_bar)
+        lv_bar_set_value(spk_prog_bar, step, LV_ANIM_OFF);
+
+    // Step label
+    if (lbl_spk_step) {
+        if (done) {
+            lv_label_set_text(lbl_spk_step, LV_SYMBOL_OK " All tests complete!");
+        } else if (!running && step == 0) {
+            lv_label_set_text(lbl_spk_step, "Tap Play to start...");
+        } else if (!running && step > 0) {
+            // Stopped mid-way
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Stopped at %d/%d. Tap Play to restart.", step, total);
+            lv_label_set_text(lbl_spk_step, buf);
+        } else if (paused) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), LV_SYMBOL_PAUSE " %d/%d: %s (paused)",
+                     step + 1, total, spk_step_names[step]);
+            lv_label_set_text(lbl_spk_step, buf);
+        } else if (running && step < total) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), LV_SYMBOL_PLAY " %d/%d: %s",
+                     step + 1, total, spk_step_names[step]);
+            lv_label_set_text(lbl_spk_step, buf);
+        }
+    }
+
+    // ── Play / Pause / Resume / Restart button ──────────────────────
+    // Always enabled (idle = ready to play, done = ready to restart).
+    // Width: full row when Stop is hidden, half when Stop is visible.
+    if (btn_spk_pause) {
+        lv_obj_t *lbl = lv_obj_get_child(btn_spk_pause, 0);
+        lv_obj_clear_state(btn_spk_pause, LV_STATE_DISABLED);
+
+        if (!running) {
+            // Idle or finished — show Play (full width, Stop hidden)
+            if (lbl) lv_label_set_text(lbl,
+                done ? LV_SYMBOL_PLAY " Play Again" : LV_SYMBOL_PLAY " Play");
+            lv_obj_set_width(btn_spk_pause, row_w);
+        } else if (paused) {
+            if (lbl) lv_label_set_text(lbl, LV_SYMBOL_PLAY " Resume");
+            lv_obj_set_width(btn_spk_pause, half);
+        } else {
+            if (lbl) lv_label_set_text(lbl, LV_SYMBOL_PAUSE " Pause");
+            lv_obj_set_width(btn_spk_pause, half);
+        }
+    }
+
+    // ── Stop button — only visible while running ────────────────────
+    if (btn_spk_stop) {
+        if (running && !done) {
+            lv_obj_clear_flag(btn_spk_stop, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_state(btn_spk_stop, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_flag(btn_spk_stop, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }

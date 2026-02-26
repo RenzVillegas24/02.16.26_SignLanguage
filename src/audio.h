@@ -56,6 +56,16 @@ void audio_play_chirp(uint16_t start_hz, uint16_t end_hz, uint16_t duration_ms);
 void audio_play_beeps(uint16_t freq_hz, uint16_t beep_ms, uint16_t pause_ms, uint8_t count);
 
 // ─────────────────────────────────────────────
+//  Playback poll hook
+//  Called inside every write loop chunk.
+//  Return true  → abort current audio immediately (stop/interrupt).
+//  Return false → continue (or block internally while paused).
+//  Set to nullptr to disable.
+// ─────────────────────────────────────────────
+typedef bool (*audio_poll_fn)();
+void audio_set_poll(audio_poll_fn fn);   // register / clear the poll hook
+
+// ─────────────────────────────────────────────
 //  WAV File Playback  (SPIFFS)
 // ─────────────────────────────────────────────
 bool audio_play_wav(const char* filepath);          // play a single .wav file
