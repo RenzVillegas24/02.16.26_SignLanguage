@@ -53,38 +53,53 @@ static const uint8_t hall_channels[] = {
 // ── Flex sensor calibration ──────────────────
 #define CALIBRATION_TIME_MS  5000
 
+// EMA smoothing factor (0.0–1.0). Lower = heavier smoothing.
+// 0.3 keeps responsiveness while damping noise well.
+#define FLEX_EMA_ALPHA  0.3f
+
+// Adaptive baseline tracking speed (very slow EMA, only when in deadzone)
+#define BASELINE_ADAPT_ALPHA  0.005f
+
 struct FlexCalibration {
     uint16_t flat_value;      // Measured flat hand position (set at runtime)
     uint16_t upward_range;    // ADC counts from flat → fully flexed up
     uint16_t downward_range;  // ADC counts from flat → fully flexed down
+    uint16_t noise_deadzone;  // Auto-measured: ignore deviations within this band
     bool     calibrated;
 };
 
-//                         flat  up   down  (Thumb & Pinky ranges TBD)
+//                         flat  up   down  dz
 static FlexCalibration flex_cal[NUM_FLEX_SENSORS] = {
-    {0, 100, 70, false},
-    {0, 220, 110, false},   
-    {0, 220, 110, false},   
-    {0, 220, 110, false},  
-    {0, 100, 70, false}
+    {0, 150, 90, 0, false}, 
+    {0, 150, 110, 0, false},   
+    {0, 150, 110, 0, false},   
+    {0, 150, 110, 0, false},  
+    {0, 150, 90, 0, false} 
 };
+
+// Per-sensor EMA state (initialised to first raw reading)
+static float flex_ema[NUM_FLEX_SENSORS] = {0};
+static bool  flex_ema_init = false;
 
 static bool calibration_complete = false;
 
-// ── Hall sensor calibration (fixed from measurement) ─────────────
+// ── Hall sensor calibration ───────────────────────────────────────
+// normal  → measured at runtime (glove resting, no magnet)
+// front_range / back_range → hardcoded ADC counts from measurement
 struct HallCalibration {
-    uint16_t normal;    // No magnet present
-    uint16_t front;     // Magnet on front face  → ADC goes HIGH
-    uint16_t back;      // Magnet on back face   → ADC goes LOW
+    uint16_t normal;        // Measured at runtime, no magnet
+    uint16_t front_range;   // ADC counts: normal → magnet front (HIGH side)
+    uint16_t back_range;    // ADC counts: normal → magnet back  (LOW side)
+    bool     calibrated;
 };
 
-//                          normal  front   back
-static const HallCalibration hall_cal[NUM_HALL_SENSORS] = {
-    {1915, 3060, 1690},   // Thumb
-    {1875, 3060, 1542},   // Index
-    {1910, 3070, 1475},   // Middle
-    {1970, 3065, 1575},   // Ring
-    {1910, 3070, 1605},   // Pinky
+//                            norm   front_r  back_r
+static HallCalibration hall_cal[NUM_HALL_SENSORS] = {
+    {0, 1145,  225, false},  // Thumb:  front 1915→3060 (+1145), back 1915→1690 (-225)
+    {0, 1185,  333, false},  // Index:  front 1875→3060 (+1185), back 1875→1542 (-333)
+    {0, 1160,  435, false},  // Middle: front 1910→3070 (+1160), back 1910→1475 (-435)
+    {0, 1095,  395, false},  // Ring:   front 1970→3065 (+1095), back 1970→1575 (-395)
+    {0, 1160,  305, false},  // Pinky:  front 1910→3070 (+1160), back 1910→1605 (-305)
 };
 
 // ── Local mux helpers (standalone, no dependency on sensors.cpp) ──
@@ -217,84 +232,143 @@ static void mpu_read_converted(float *ax, float *ay, float *az,
     *roll  = atan2f(*ay, sqrtf((*ax) * (*ax) + (*az) * (*az))) * 180.0f / PI;
 }
 
-// ── Flex sensor calibration ──────────────────
-static void calibrate_flex_sensors() {
+// ── Unified calibration (flat hand, no magnet) ───────────────────
+static void calibrate_sensors() {
     Serial.println("\n╔════════════════════════════════════════╗");
-    Serial.println("║   FLEX SENSOR CALIBRATION MODE         ║");
+    Serial.println("║        SENSOR CALIBRATION MODE         ║");
+    Serial.println("╠════════════════════════════════════════╣");
+    Serial.println("║  Keep hand FLAT and NO magnets near    ║");
+    Serial.println("║  the sensors for 5 seconds...          ║");
     Serial.println("╚════════════════════════════════════════╝");
-    Serial.println("Please keep your hand FLAT for 5 seconds...");
-    Serial.println("Calibrating");
-    
-    uint32_t accumulator[NUM_FLEX_SENSORS] = {0};
-    uint32_t start_time = millis();
+    Serial.print("Sampling");
+
+    uint32_t flex_acc[NUM_FLEX_SENSORS] = {0};
+    uint32_t hall_acc[NUM_HALL_SENSORS] = {0};
+    uint16_t flex_min[NUM_FLEX_SENSORS], flex_max[NUM_FLEX_SENSORS];
+    uint16_t hall_min[NUM_HALL_SENSORS], hall_max[NUM_HALL_SENSORS];
+
+    // Init min/max to extremes
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) { flex_min[i] = 4095; flex_max[i] = 0; }
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) { hall_min[i] = 4095; hall_max[i] = 0; }
+
+    uint32_t start_time  = millis();
     uint16_t sample_count = 0;
-    
-    // Collect samples for 5 seconds
+
     while (millis() - start_time < CALIBRATION_TIME_MS) {
-        // Read all flex sensors
         for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-            uint16_t value = mux_read(flex_channels[i]);
-            accumulator[i] += value;
+            uint16_t v = mux_read(flex_channels[i]);
+            flex_acc[i] += v;
+            if (v < flex_min[i]) flex_min[i] = v;
+            if (v > flex_max[i]) flex_max[i] = v;
+
+            printf("\rSampling: %d%%", (int)(((float)(millis() - start_time) / CALIBRATION_TIME_MS) * 100));
+        }
+        for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+            uint16_t v = mux_read(hall_channels[i]);
+            hall_acc[i] += v;
+            if (v < hall_min[i]) hall_min[i] = v;
+            if (v > hall_max[i]) hall_max[i] = v;
+
+            printf("\rSampling: %d%%", (int)(((float)(millis() - start_time) / CALIBRATION_TIME_MS) * 100));
         }
         sample_count++;
-        
-        // Print progress dots
-        if (sample_count % 20 == 0) {
-            Serial.print(".");
-        }
-        
-        delay(50);  // Sample every 50ms
+        if (sample_count % 20 == 0) Serial.print(".");
+        delay(50);
     }
-    
+
+    // Store means + auto-deadzone from measured noise (2× observed spread)
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        flex_cal[i].flat_value    = flex_acc[i] / sample_count;
+        uint16_t noise            = flex_max[i] - flex_min[i];
+        flex_cal[i].noise_deadzone = noise * 2;   // generous deadzone
+        flex_cal[i].calibrated    = true;
+        // Seed EMA with calibrated flat value
+        flex_ema[i] = (float)flex_cal[i].flat_value;
+    }
+    flex_ema_init = true;
+
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        hall_cal[i].normal     = hall_acc[i] / sample_count;
+        hall_cal[i].calibrated = true;
+    }
+    calibration_complete = true;
+
     Serial.println("\n");
     Serial.println("Calibration complete!");
-    Serial.println("─────────────────────────────────────────");
-    
-    // Calculate mean values and store as flat position
+    Serial.println("─── Flex ────────────────────────────────");
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        flex_cal[i].flat_value = accumulator[i] / sample_count;
-        flex_cal[i].calibrated = true;
-        
-        Serial.printf("  %s: Flat = %4d", finger_names[i], flex_cal[i].flat_value);
-        
+        Serial.printf("  %-6s  Flat = %4d", finger_names[i], flex_cal[i].flat_value);
         if (flex_cal[i].upward_range > 0 || flex_cal[i].downward_range > 0) {
-            Serial.printf("  (Up: +%d, Down: -%d)", 
-                         flex_cal[i].upward_range, 
-                         flex_cal[i].downward_range);
+            Serial.printf("  (Up: +%d, Down: -%d, DZ: ±%d)",
+                          flex_cal[i].upward_range, flex_cal[i].downward_range,
+                          flex_cal[i].noise_deadzone);
         } else {
-            Serial.print("  (Range not configured)");
+            Serial.print("  (range not yet characterised)");
         }
         Serial.println();
     }
-    
+    Serial.println("─── Hall ────────────────────────────────");
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        Serial.printf("  %-6s  Normal = %4d  (Front: +%d, Back: -%d)\n",
+                      finger_names[i], hall_cal[i].normal,
+                      hall_cal[i].front_range, hall_cal[i].back_range);
+    }
     Serial.println("─────────────────────────────────────────\n");
-    calibration_complete = true;
 }
 
 static int8_t get_flex_percentage(int finger_index, uint16_t raw_value) {
     if (!flex_cal[finger_index].calibrated) return 0;
 
-    int16_t diff = raw_value - flex_cal[finger_index].flat_value;
-
-    if (diff > 0) {
-        if (flex_cal[finger_index].upward_range == 0) return 0;
-        return (int8_t)constrain((diff * 100) / flex_cal[finger_index].upward_range, 0, 100);
+    // ── EMA smoothing ───────────────────────────
+    if (!flex_ema_init) {
+        flex_ema[finger_index] = (float)raw_value;
     } else {
+        flex_ema[finger_index] += FLEX_EMA_ALPHA *
+                                  ((float)raw_value - flex_ema[finger_index]);
+    }
+    int16_t smoothed = (int16_t)(flex_ema[finger_index] + 0.5f);
+
+    // ── Deviation from flat baseline ────────────
+    int16_t diff = smoothed - (int16_t)flex_cal[finger_index].flat_value;
+    int16_t dz   = (int16_t)flex_cal[finger_index].noise_deadzone;
+
+    // ── Inside deadzone → treat as flat, and slowly adapt baseline ──
+    if (abs(diff) <= dz) {
+        // Drift-track: nudge flat_value toward current reading so baseline
+        // follows slow sensor drift (only when hand is resting in deadzone)
+        float new_flat = (float)flex_cal[finger_index].flat_value +
+                         BASELINE_ADAPT_ALPHA *
+                         ((float)smoothed - (float)flex_cal[finger_index].flat_value);
+        flex_cal[finger_index].flat_value = (uint16_t)(new_flat + 0.5f);
+        return 0;
+    }
+
+    // ── Beyond deadzone → compute percentage ────
+    // Subtract the deadzone from the deviation so 0% starts at the edge
+    if (diff > 0) {
+        int16_t effective = diff - dz;
+        if (flex_cal[finger_index].upward_range == 0) return 0;
+        int16_t effective_range = (int16_t)flex_cal[finger_index].upward_range - dz;
+        if (effective_range <= 0) effective_range = 1;
+        return (int8_t)constrain((effective * 100) / effective_range, 0, 100);
+    } else {
+        int16_t effective = abs(diff) - dz;
         if (flex_cal[finger_index].downward_range == 0) return 0;
-        return (int8_t)constrain((abs(diff) * 100) / flex_cal[finger_index].downward_range * -1, -100, 0);
+        int16_t effective_range = (int16_t)flex_cal[finger_index].downward_range - dz;
+        if (effective_range <= 0) effective_range = 1;
+        return (int8_t)constrain((effective * 100) / effective_range * -1, -100, 0);
     }
 }
 
 static int8_t get_hall_percentage(int idx, uint16_t raw) {
-    int16_t diff  = (int16_t)raw - (int16_t)hall_cal[idx].normal;
+    if (!hall_cal[idx].calibrated) return 0;
+    int16_t diff = (int16_t)raw - (int16_t)hall_cal[idx].normal;
     if (diff > 0) {
-        uint16_t range = hall_cal[idx].front - hall_cal[idx].normal;
-        if (range == 0) return 0;
-        return (int8_t)constrain((diff * 100) / (int16_t)range, 0, 100);
+        if (hall_cal[idx].front_range == 0) return 0;
+        return (int8_t)constrain((diff * 100) / (int16_t)hall_cal[idx].front_range, 0, 100);
     } else if (diff < 0) {
-        uint16_t range = hall_cal[idx].normal - hall_cal[idx].back;
-        if (range == 0) return 0;
-        return (int8_t)constrain((diff * 100) / (int16_t)range, -100, 0);
+        if (hall_cal[idx].back_range == 0) return 0;
+        return (int8_t)constrain((diff * 100) / (int16_t)hall_cal[idx].back_range, -100, 0);
     }
     return 0;
 }
@@ -357,8 +431,8 @@ void setup() {
     
     Serial.println();
     
-    // Calibrate flex sensors
-    calibrate_flex_sensors();
+    // Calibrate all sensors
+    calibrate_sensors();
     
     Serial.println("[TEST] Starting sensor readings...\n");
 }
@@ -389,14 +463,16 @@ void loop() {
     Serial.println("─── Flex Sensors ───────────────────────");
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
         int8_t flex_percent = get_flex_percentage(i, flex[i]);
+        bool has_range = flex_cal[i].upward_range > 0 || flex_cal[i].downward_range > 0;
         Serial.printf("  %-6s (CH%2d): %4d  ", finger_names[i], flex_channels[i], flex[i]);
         print_bar(flex[i]);
-        
         if (calibration_complete) {
-            if (flex_percent > 0) {
-                Serial.printf("  ▲ %3d%% Up", flex_percent);
+            if (!has_range) {
+                Serial.print("  -- (uncharacterised)");
+            } else if (flex_percent > 0) {
+                Serial.printf("  ▲ %3d%% Up", (int)flex_percent);
             } else if (flex_percent < 0) {
-                Serial.printf("  ▼ %3d%% Down", abs(flex_percent));
+                Serial.printf("  ▼ %3d%% Down", (int)abs(flex_percent));
             } else {
                 Serial.print("  ● Flat");
             }
@@ -410,7 +486,9 @@ void loop() {
         int8_t hall_pct = get_hall_percentage(i, hall[i]);
         Serial.printf("  %-6s (CH%2d): %4d  ", finger_names[i], hall_channels[i], hall[i]);
         print_centered_bar(hall_pct);
-        if (hall_pct > 5) {
+        if (!hall_cal[i].calibrated) {
+            Serial.print("  -- (uncalibrated)");
+        } else if (hall_pct > 5) {
             Serial.printf("  ▲ %3d%% Front", (int)hall_pct);
         } else if (hall_pct < -5) {
             Serial.printf("  ▼ %3d%% Back", (int)abs(hall_pct));
