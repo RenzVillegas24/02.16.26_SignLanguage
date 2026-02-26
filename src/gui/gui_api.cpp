@@ -72,6 +72,7 @@ lv_obj_t *calib_overlay    = nullptr;
 lv_obj_t *calib_bar        = nullptr;
 lv_obj_t *calib_lbl        = nullptr;
 lv_obj_t *lbl_calib_info   = nullptr;
+lv_obj_t *btn_calibrate    = nullptr;
 
 lv_obj_t *bat_label = nullptr;
 lv_obj_t *cpu_label = nullptr;
@@ -219,29 +220,32 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         lv_label_set_text(lbl_test_detail, buf);
         break;
     case 2:
-        // Flex sensor test — update bars + labels with live data
+        // Flex sensor test — update bars + labels with live data (including RAW)
         if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
             for (int i = 0; i < 5; i++) {
                 lv_bar_set_value(sensor_test_bars[i], pd.flex_pct[i], LV_ANIM_OFF);
-                lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: %+d%%", i + 1, pd.flex_pct[i]);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: %+d%% (R:%d)",
+                                      i + 1, pd.flex_pct[i], pd.flex_raw[i]);
             }
         }
         break;
     case 3:
-        // Hall effect side test — update bars + labels
+        // Hall effect side test — update bars + labels (including RAW)
         if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
             for (int i = 0; i < 5; i++) {
                 lv_bar_set_value(sensor_test_bars[i], pd.hall_pct[i], LV_ANIM_OFF);
-                lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: %+d%%", i + 1, pd.hall_pct[i]);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: %+d%% (R:%d)",
+                                      i + 1, pd.hall_pct[i], pd.hall_raw[i]);
             }
         }
         break;
     case 4:
-        // Hall effect top test — update bars + labels
+        // Hall effect top test — update bars + labels (including RAW)
         if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
             for (int i = 0; i < 5; i++) {
                 lv_bar_set_value(sensor_test_bars[i], pd.hall_top_pct[i], LV_ANIM_OFF);
-                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: %+d%%", i + 1, pd.hall_top_pct[i]);
+                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: %+d%% (R:%d)",
+                                      i + 1, pd.hall_top_pct[i], pd.hall_top_raw[i]);
             }
         }
         break;
@@ -258,9 +262,15 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         break;
     }
     case 6:
+        // Speaker test — show running/done status
+        // Note: speaker_running is extern volatile in gui_callbacks.cpp
+        // We check via gui_is_speaker_running() (we'll just show a static message
+        // and let the user adjust volume while it plays)
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n\n"
-            LV_SYMBOL_OK " Tone played\n"
+            LV_SYMBOL_VOLUME_MAX " Audio suite running...\n"
+            "Musical scale, sweeps,\n"
+            "alarms, melody, WAV.\n\n"
             "Adjust volume below.");
         break;
     default:
@@ -414,12 +424,7 @@ void gui_update_calibration_progress(int pct) {
     if (pct >= 100) {
         s_calibrating = false;
         hide_calibration_dialog();
-        if (lbl_calib_info) {
-            lv_label_set_text(lbl_calib_info,
-                LV_SYMBOL_OK " Calibration complete!\n"
-                "Sensors ready for testing.\n"
-                "Baseline values stored.");
-        }
+        refresh_calib_info_label();
     } else {
         s_calibrating = true;
     }
@@ -427,4 +432,57 @@ void gui_update_calibration_progress(int pct) {
 
 bool gui_is_calibrating() {
     return s_calibrating;
+}
+
+void refresh_calib_info_label() {
+    if (!lbl_calib_info) return;
+
+    if (!sensor_module_is_calibrated()) {
+        lv_label_set_text(lbl_calib_info,
+            LV_SYMBOL_WARNING " Not calibrated.\n"
+            "Tap 'Calibrate' to begin.\n"
+            "Keep hand flat, no magnets.");
+        return;
+    }
+
+    // Fetch actual calibration data
+    FlexCalibInfo fc[NUM_FLEX_SENSORS];
+    HallCalibInfo hc[NUM_HALL_SENSORS];
+    HallCalibInfo htc[NUM_HALL_TOP_SENSORS];
+    sensor_module_get_flex_cal(fc);
+    sensor_module_get_hall_cal(hc);
+    sensor_module_get_hall_top_cal(htc);
+
+    static const char *fn[] = {"Th","Ix","Mi","Ri","Pi"};
+    char buf[480];
+    int off = 0;
+
+    off += snprintf(buf + off, sizeof(buf) - off,
+                    LV_SYMBOL_OK " Calibrated & saved!\n\n");
+
+    off += snprintf(buf + off, sizeof(buf) - off, "Flex (flat / +up / -dn):\n");
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        off += snprintf(buf + off, sizeof(buf) - off,
+                        " %s: %d / +%d / -%d\n",
+                        fn[i], fc[i].flat_value,
+                        fc[i].upward_range, fc[i].downward_range);
+    }
+
+    off += snprintf(buf + off, sizeof(buf) - off, "\nHall (norm / +front / -back):\n");
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        off += snprintf(buf + off, sizeof(buf) - off,
+                        " %s: %d / +%d / -%d\n",
+                        fn[i], hc[i].normal,
+                        hc[i].front_range, hc[i].back_range);
+    }
+
+    off += snprintf(buf + off, sizeof(buf) - off, "\nHall Top (norm / +front / -back):\n");
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        off += snprintf(buf + off, sizeof(buf) - off,
+                        " %s: %d / +%d / -%d\n",
+                        fn[i], htc[i].normal,
+                        htc[i].front_range, htc[i].back_range);
+    }
+
+    lv_label_set_text(lbl_calib_info, buf);
 }

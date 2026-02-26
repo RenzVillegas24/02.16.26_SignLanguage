@@ -4,6 +4,8 @@
  *        accent colour picker, and comprehensive 15-scene OLED benchmark.
  */
 #include "gui_internal.h"
+#include "sensor_module/sensor_module.h"
+#include "test_sound_module.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Helpers
@@ -197,30 +199,77 @@ void cb_test_mpu(lv_event_t *e) {
     populate_test_detail(); nav_to(scr_test_detail, true);
 }
 
-// ── Sensors submenu: Trigger calibration on entry ──
-static lv_timer_t *calib_timer = nullptr;
-static int calib_progress = 0;
-static bool calib_running = false;
+// ── Sensors submenu: Real calibration via FreeRTOS task ──
+static volatile int  calib_progress  = 0;
+static volatile bool calib_running   = false;
+static volatile bool calib_done_flag = false;
+static lv_timer_t   *calib_poll_timer = nullptr;
+static TaskHandle_t  calib_task_handle = nullptr;
 
-static void calib_timer_cb(lv_timer_t *t) {
+// Speaker test — run on FreeRTOS task to avoid blocking GUI
+static volatile bool  speaker_running   = false;
+static volatile bool  speaker_done_flag = false;
+static TaskHandle_t   speaker_task_handle = nullptr;
+
+// Progress callback called FROM the calibration FreeRTOS task (NOT LVGL-safe)
+static void calib_progress_cb(int pct) {
+    calib_progress = pct;
+}
+
+// FreeRTOS task that runs the blocking calibration
+static void calib_task_fn(void *param) {
+    (void)param;
+    sensor_module_calibrate(calib_progress_cb);
+    calib_progress  = 100;
+    calib_done_flag = true;
+    calib_task_handle = nullptr;
+    vTaskDelete(nullptr);
+}
+
+// LVGL timer that polls the volatile progress and updates the UI
+static void calib_poll_timer_cb(lv_timer_t *t) {
     (void)t;
-    // This simulates calibration progress; real calibration is done via sensor_module
-    // The actual calibration runs in main loop, this just updates the UI
-    if (calib_progress >= 100) {
-        calib_running = false;
-        if (calib_timer) { lv_timer_del(calib_timer); calib_timer = nullptr; }
+    int pct = calib_progress;
+    update_calibration_progress(pct);
+
+    if (calib_done_flag) {
+        calib_running   = false;
+        calib_done_flag = false;
+
+        // Stop this polling timer
+        if (calib_poll_timer) { lv_timer_del(calib_poll_timer); calib_poll_timer = nullptr; }
+
         hide_calibration_dialog();
-        // Update calibration info label
-        if (lbl_calib_info) {
-            lv_label_set_text(lbl_calib_info,
-                LV_SYMBOL_OK " Calibration complete!\n"
-                "Sensors ready for testing.\n"
-                "Baseline values stored.");
-        }
-        return;
+        refresh_calib_info_label();
     }
-    calib_progress += 2;
-    update_calibration_progress(calib_progress);
+}
+
+// Start the real calibration sequence
+static void start_real_calibration() {
+    if (calib_running) return;  // already running
+
+    calib_progress  = 0;
+    calib_running   = true;
+    calib_done_flag = false;
+
+    show_calibration_dialog();
+
+    // Launch FreeRTOS task for blocking calibration
+    xTaskCreatePinnedToCore(calib_task_fn, "calib", 4096, nullptr, 1,
+                            &calib_task_handle, 1);
+
+    // Create LVGL timer to poll progress every 100 ms
+    if (calib_poll_timer) lv_timer_del(calib_poll_timer);
+    calib_poll_timer = lv_timer_create(calib_poll_timer_cb, 100, nullptr);
+}
+
+// FreeRTOS task for speaker test
+static void speaker_task_fn(void *param) {
+    (void)param;
+    test_sound_run_all();
+    speaker_done_flag = true;
+    speaker_task_handle = nullptr;
+    vTaskDelete(nullptr);
 }
 
 void cb_test_sensors(lv_event_t *e) {
@@ -230,22 +279,13 @@ void cb_test_sensors(lv_event_t *e) {
     fire_mode(MODE_TEST);
     test_active = -1;
 
-    // Start calibration sequence
-    if (!sensor_module_is_calibrated()) {
-        calib_progress = 0;
-        calib_running = true;
-        show_calibration_dialog();
-        // Create timer to animate progress (real calibration triggered from main.cpp)
-        if (calib_timer) lv_timer_del(calib_timer);
-        calib_timer = lv_timer_create(calib_timer_cb, 100, NULL);
-    } else {
-        // Already calibrated, just show ready status
-        if (lbl_calib_info) {
-            lv_label_set_text(lbl_calib_info,
-                LV_SYMBOL_OK " Sensors calibrated.\n"
-                "Ready for testing.");
-        }
-    }
+    // Update the calibration info label on entry
+    refresh_calib_info_label();
+}
+
+void cb_calibrate(lv_event_t *e) {
+    (void)e;
+    start_real_calibration();
 }
 
 void cb_test_flex(lv_event_t *e) {
@@ -271,7 +311,14 @@ void cb_test_battery(lv_event_t *e) {
 void cb_test_speaker(lv_event_t *e) {
     (void)e; test_active = 6;
     populate_test_detail(); nav_to(scr_test_detail, true);
-    if (s_test_speaker_cb) s_test_speaker_cb();
+
+    // Run speaker test on a FreeRTOS task to avoid blocking the GUI
+    if (!speaker_running) {
+        speaker_running   = true;
+        speaker_done_flag = false;
+        xTaskCreatePinnedToCore(speaker_task_fn, "spk_test", 4096, nullptr, 1,
+                                &speaker_task_handle, 1);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════

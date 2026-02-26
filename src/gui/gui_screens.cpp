@@ -4,6 +4,7 @@
  *        Now with back-gesture support, accent colours, and emoji test titles.
  */
 #include "gui_internal.h"
+#include "sensor_module/sensor_module.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Splash
@@ -265,9 +266,14 @@ void build_test_sensors() {
     mk_nav_btn(cont, LV_SYMBOL_MINUS  " Flex Sensor",  cb_test_flex);
     mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Effect",  cb_test_hall);
     mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Top",     cb_test_hall_top);
- 
-    // Calibration info footer
+
+    // Calibrate button
     mk_section(cont, "CALIBRATION");
+    btn_calibrate = mk_btn(cont, LV_SYMBOL_REFRESH " Calibrate", BTN_W, 44, cb_calibrate);
+    lv_obj_set_style_bg_color(btn_calibrate, accent_dark(), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_calibrate, 0), &lv_font_montserrat_16, 0);
+
+    // Calibration info footer
     lv_obj_t *cbox = lv_obj_create(cont);
     lv_obj_set_size(cbox, BTN_W, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(cbox, tc->about_bg, 0);
@@ -278,7 +284,10 @@ void build_test_sensors() {
     lv_obj_clear_flag(cbox, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_calib_info = lv_label_create(cbox);
-    lv_label_set_text(lbl_calib_info, "Calibrating sensors...\nPlease wait.");
+    lv_label_set_text(lbl_calib_info,
+        sensor_module_is_calibrated()
+            ? (LV_SYMBOL_OK " Calibrated (saved).\nTap button to re-calibrate.")
+            : (LV_SYMBOL_WARNING " Not calibrated.\nTap 'Calibrate' to begin."));
     lv_obj_set_style_text_font(lbl_calib_info, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(lbl_calib_info, tc->about_text, 0);
     lv_obj_set_width(lbl_calib_info, BTN_W - 24);
@@ -508,33 +517,45 @@ void populate_test_detail() {
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     case 2:
-        lv_label_set_text(lbl_test_detail, "Flex Sensor Test\nBend each finger to test.");
+        lv_label_set_text(lbl_test_detail,
+            sensor_module_is_calibrated()
+                ? "Flex Sensor Test\nBend each finger to test.\n(RAW values in brackets)"
+                : "Flex Sensor Test\n\n" LV_SYMBOL_WARNING " Not calibrated!\nGo back and calibrate first.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
-        // Show sensor bars for Flex
-        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
-        for (int i = 0; i < 5; i++) {
-            lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: 0%%", i + 1);
-            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        if (sensor_module_is_calibrated()) {
+            lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < 5; i++) {
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: 0%% (R:0)", i + 1);
+                lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+            }
         }
         break;
     case 3:
-        lv_label_set_text(lbl_test_detail, "Hall Effect (side) Test\nMove magnets near sensors.");
+        lv_label_set_text(lbl_test_detail,
+            sensor_module_is_calibrated()
+                ? "Hall Effect (side) Test\nMove magnets near sensors.\n(RAW values in brackets)"
+                : "Hall Effect (side) Test\n\n" LV_SYMBOL_WARNING " Not calibrated!\nGo back and calibrate first.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
-        // Show sensor bars for Hall
-        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
-        for (int i = 0; i < 5; i++) {
-            lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: 0%%", i + 1);
-            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        if (sensor_module_is_calibrated()) {
+            lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < 5; i++) {
+                lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: 0%% (R:0)", i + 1);
+                lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+            }
         }
         break;
     case 4:
-        lv_label_set_text(lbl_test_detail, "Hall Effect (top) Test\nTop-of-finger sensors.");
+        lv_label_set_text(lbl_test_detail,
+            sensor_module_is_calibrated()
+                ? "Hall Effect (top) Test\nTop-of-finger sensors.\n(RAW values in brackets)"
+                : "Hall Effect (top) Test\n\n" LV_SYMBOL_WARNING " Not calibrated!\nGo back and calibrate first.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
-        // Show sensor bars for Hall Top
-        lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
-        for (int i = 0; i < 5; i++) {
-            lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: 0%%", i + 1);
-            lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+        if (sensor_module_is_calibrated()) {
+            lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < 5; i++) {
+                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: 0%% (R:0)", i + 1);
+                lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
+            }
         }
         break;
     case 5: {
@@ -553,7 +574,7 @@ void populate_test_detail() {
     case 6:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n\n"
-            "Running full audio suite:\n"
+            LV_SYMBOL_VOLUME_MAX " Running audio suite:\n"
             "Musical scale, sweeps,\n"
             "alarms, melody, WAV...\n\n"
             "Adjust volume below.");

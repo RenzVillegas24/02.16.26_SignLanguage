@@ -5,6 +5,7 @@
  */
 #include "sensor_module.h"
 #include <math.h>
+#include <Preferences.h>
 
 // ─────────────────────────────────────────────
 //  Tunables
@@ -197,6 +198,13 @@ void sensor_module_init() {
     for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
         hall_top_cal[i].calibrated = false;
 
+    // Try to restore calibration from NVS
+    if (sensor_module_load_calibration()) {
+        Serial.println("[SENSOR_MODULE] Calibration restored from NVS");
+    } else {
+        Serial.println("[SENSOR_MODULE] No saved calibration found");
+    }
+
     Serial.println("[SENSOR_MODULE] Initialised");
 }
 
@@ -257,6 +265,9 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
         hall_top_cal[i].calibrated = true;
     }
     s_calibrated = true;
+
+    // Persist to NVS
+    sensor_module_save_calibration();
 
     // Print summary
     Serial.println("\n\nCalibration complete!");
@@ -405,4 +416,111 @@ const char *sensor_module_predict(ProcessedSensorData &pd) {
     }
 
     return pd.predicted_label;
+}
+
+// ─────────────────────────────────────────────
+//  NVS persistence
+// ─────────────────────────────────────────────
+#define CAL_NVS_NS   "s_cal"
+#define CAL_NVS_MAGIC 0xCA1B
+
+void sensor_module_save_calibration() {
+    Preferences prefs;
+    prefs.begin(CAL_NVS_NS, false);
+    prefs.putUShort("magic", CAL_NVS_MAGIC);
+
+    // Flex
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "ff%d", i);  prefs.putUShort(k, flex_cal[i].flat_value);
+        snprintf(k, sizeof(k), "fu%d", i);  prefs.putUShort(k, flex_cal[i].upward_range);
+        snprintf(k, sizeof(k), "fd%d", i);  prefs.putUShort(k, flex_cal[i].downward_range);
+        snprintf(k, sizeof(k), "fz%d", i);  prefs.putUShort(k, flex_cal[i].noise_deadzone);
+    }
+    // Hall side
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "hn%d", i);  prefs.putUShort(k, hall_cal[i].normal);
+        snprintf(k, sizeof(k), "hf%d", i);  prefs.putUShort(k, hall_cal[i].front_range);
+        snprintf(k, sizeof(k), "hb%d", i);  prefs.putUShort(k, hall_cal[i].back_range);
+    }
+    // Hall top
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "tn%d", i);  prefs.putUShort(k, hall_top_cal[i].normal);
+        snprintf(k, sizeof(k), "tf%d", i);  prefs.putUShort(k, hall_top_cal[i].front_range);
+        snprintf(k, sizeof(k), "tb%d", i);  prefs.putUShort(k, hall_top_cal[i].back_range);
+    }
+    prefs.end();
+    Serial.println("[SENSOR_MODULE] Calibration saved to NVS");
+}
+
+bool sensor_module_load_calibration() {
+    Preferences prefs;
+    prefs.begin(CAL_NVS_NS, true);
+    if (prefs.getUShort("magic", 0) != CAL_NVS_MAGIC) {
+        prefs.end();
+        return false;
+    }
+
+    // Flex
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "ff%d", i);  flex_cal[i].flat_value     = prefs.getUShort(k, 0);
+        snprintf(k, sizeof(k), "fu%d", i);  flex_cal[i].upward_range   = prefs.getUShort(k, 150);
+        snprintf(k, sizeof(k), "fd%d", i);  flex_cal[i].downward_range = prefs.getUShort(k, 110);
+        snprintf(k, sizeof(k), "fz%d", i);  flex_cal[i].noise_deadzone = prefs.getUShort(k, 0);
+        flex_cal[i].calibrated = true;
+        flex_ema[i] = (float)flex_cal[i].flat_value;
+    }
+    flex_ema_init = true;
+
+    // Hall side
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "hn%d", i);  hall_cal[i].normal      = prefs.getUShort(k, 0);
+        snprintf(k, sizeof(k), "hf%d", i);  hall_cal[i].front_range = prefs.getUShort(k, 1150);
+        snprintf(k, sizeof(k), "hb%d", i);  hall_cal[i].back_range  = prefs.getUShort(k, 400);
+        hall_cal[i].calibrated = true;
+    }
+    // Hall top
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), "tn%d", i);  hall_top_cal[i].normal      = prefs.getUShort(k, 0);
+        snprintf(k, sizeof(k), "tf%d", i);  hall_top_cal[i].front_range = prefs.getUShort(k, 1150);
+        snprintf(k, sizeof(k), "tb%d", i);  hall_top_cal[i].back_range  = prefs.getUShort(k, 400);
+        hall_top_cal[i].calibrated = true;
+    }
+    prefs.end();
+
+    s_calibrated = true;
+    return true;
+}
+
+// ─────────────────────────────────────────────
+//  Calibration info getters (for GUI)
+// ─────────────────────────────────────────────
+void sensor_module_get_flex_cal(FlexCalibInfo out[NUM_FLEX_SENSORS]) {
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        out[i].flat_value     = flex_cal[i].flat_value;
+        out[i].upward_range   = flex_cal[i].upward_range;
+        out[i].downward_range = flex_cal[i].downward_range;
+        out[i].noise_deadzone = flex_cal[i].noise_deadzone;
+    }
+}
+
+void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]) {
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        out[i].normal      = hall_cal[i].normal;
+        out[i].front_range = hall_cal[i].front_range;
+        out[i].back_range  = hall_cal[i].back_range;
+    }
+}
+
+void sensor_module_get_hall_top_cal(HallCalibInfo out[NUM_HALL_TOP_SENSORS]) {
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        out[i].normal      = hall_top_cal[i].normal;
+        out[i].front_range = hall_top_cal[i].front_range;
+        out[i].back_range  = hall_top_cal[i].back_range;
+    }
 }

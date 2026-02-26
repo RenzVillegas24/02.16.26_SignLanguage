@@ -82,3 +82,28 @@ void sensor_module_format_oled(const ProcessedSensorData &pd,
 /// Returns the predicted label (also stored in pd.predicted_label).
 const char *sensor_module_predict(ProcessedSensorData &pd);
 
+// ─────────────────────────────────────────────
+//  Calibration info — for GUI display
+// ─────────────────────────────────────────────
+struct FlexCalibInfo {
+    uint16_t flat_value;
+    uint16_t upward_range;
+    uint16_t downward_range;
+    uint16_t noise_deadzone;
+};
+
+struct HallCalibInfo {
+    uint16_t normal;
+    uint16_t front_range;
+    uint16_t back_range;
+};
+
+/// Copy current calibration data into caller arrays.
+void sensor_module_get_flex_cal(FlexCalibInfo out[NUM_FLEX_SENSORS]);
+void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]);
+void sensor_module_get_hall_top_cal(HallCalibInfo out[NUM_HALL_TOP_SENSORS]);
+
+/// NVS persistence — save/load calibration data.
+void sensor_module_save_calibration();
+bool sensor_module_load_calibration();
+

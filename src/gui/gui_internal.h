@@ -148,6 +148,7 @@ extern lv_obj_t *calib_overlay;
 extern lv_obj_t *calib_bar;
 extern lv_obj_t *calib_lbl;
 extern lv_obj_t *lbl_calib_info;   // Calibration status footer in sensors menu
+extern lv_obj_t *btn_calibrate;    // Calibrate button in sensors menu
 
 extern lv_obj_t *bat_label;
 extern lv_obj_t *cpu_label;
@@ -296,6 +297,10 @@ void cb_test_hall_top(lv_event_t *e);
 void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 void cb_btn_back_test_sensors(lv_event_t *e);
+void cb_calibrate(lv_event_t *e);
 
 void cb_benchmark(lv_event_t *e);
 bool is_bench_running();
+
+// Calibration info helper — updates lbl_calib_info with real values
+void refresh_calib_info_label();
