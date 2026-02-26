@@ -1,12 +1,13 @@
-/*
- * @file gui/gui_internal.h
+/**
+ * @file gui_internal.h
  * @brief Internal shared declarations for all GUI compilation units.
- *        NOT part of the public API — only #included by gui/*.cpp files.
+ *        NOT part of the public API - only included by gui cpp files.
  */
 #pragma once
 
 #include <lvgl.h>
 #include "config.h"
+#include "sensor_module/sensor_module.h"
 #include <cstring>
 
 // ════════════════════════════════════════════════════════════════════
@@ -104,6 +105,7 @@ extern lv_obj_t *scr_test_detail;
 extern lv_obj_t *lbl_gesture;
 extern lv_obj_t *bar_flex[5];
 extern lv_obj_t *bar_hall[5];
+extern lv_obj_t *bar_hall_top[5];
 extern lv_obj_t *bars_container;
 
 extern lv_obj_t *slider_brightness;
@@ -202,7 +204,7 @@ int       mk_header(lv_obj_t *scr,
                      lv_obj_t **title_out = nullptr);
 lv_obj_t *mk_content(lv_obj_t *scr, int header_h);
 void      create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
-                      int y_start);
+                      lv_obj_t *hall_top[], int y_start);
 
 lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
                          const char *label, int32_t min_v, int32_t max_v,
@@ -273,6 +275,7 @@ void cb_test_oled(lv_event_t *e);
 void cb_test_mpu(lv_event_t *e);
 void cb_test_flex(lv_event_t *e);
 void cb_test_hall(lv_event_t *e);
+void cb_test_hall_top(lv_event_t *e);
 void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 

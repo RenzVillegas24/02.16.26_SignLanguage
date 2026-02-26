@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "sensor_module/sensor_module.h"
 
 // Forward declaration
 struct SystemInfoData;
@@ -34,8 +35,8 @@ bool gui_local_use_speech();
 // About / system info — update live data on the about panel
 void gui_update_about(const SystemInfoData &info);
 
-// Tests — update live data on test screen
-void gui_test_update(const SensorData &d);
+// Tests — update live data on test screen (with processed sensor data)
+void gui_test_update(const SensorData &d, const ProcessedSensorData &pd);
 
 // Mode callback registration
 void gui_register_mode_callback(void (*cb)(AppMode));

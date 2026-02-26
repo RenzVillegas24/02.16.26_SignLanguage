@@ -29,9 +29,17 @@
 #define MUX_CH_HALL_RING    11
 #define MUX_CH_HALL_PINKY   12
 
-#define NUM_FLEX_SENSORS    5
-#define NUM_HALL_SENSORS    5
-#define NUM_SENSOR_CHANNELS 10
+// Hall-effect sensors on TOP of each finger (yet to be calibrated)
+#define MUX_CH_HALL_TOP_THUMB   3
+#define MUX_CH_HALL_TOP_INDEX   4
+#define MUX_CH_HALL_TOP_MIDDLE  5
+#define MUX_CH_HALL_TOP_RING    13
+#define MUX_CH_HALL_TOP_PINKY   14
+
+#define NUM_FLEX_SENSORS      5
+#define NUM_HALL_SENSORS      5
+#define NUM_HALL_TOP_SENSORS  5
+#define NUM_SENSOR_CHANNELS   15
 
 // ─────────────────────────────────────────────
 //  I2S Audio (MAX98357A)
@@ -79,11 +87,12 @@ enum AppMode {
 //  Sensor Data Structure
 // ─────────────────────────────────────────────
 struct SensorData {
-    uint16_t flex[NUM_FLEX_SENSORS];     // Raw ADC 0-4095
-    uint16_t hall[NUM_HALL_SENSORS];     // Raw ADC 0-4095
-    float    accel_x, accel_y, accel_z;  // m/s²
-    float    gyro_x,  gyro_y,  gyro_z;  // rad/s
-    float    pitch, roll;                // Degrees
+    uint16_t flex[NUM_FLEX_SENSORS];         // Raw ADC 0-4095
+    uint16_t hall[NUM_HALL_SENSORS];         // Raw ADC 0-4095 (side of finger)
+    uint16_t hall_top[NUM_HALL_TOP_SENSORS]; // Raw ADC 0-4095 (top of finger)
+    float    accel_x, accel_y, accel_z;      // m/s²
+    float    gyro_x,  gyro_y,  gyro_z;      // rad/s
+    float    pitch, roll;                    // Degrees
 };
 
 // ─────────────────────────────────────────────
@@ -101,4 +110,4 @@ struct SensorData {
 //  Edge Impulse Configuration
 // ─────────────────────────────────────────────
 #define EI_SERIAL_BAUD          115200
-#define EI_NUM_FEATURES         16  // 5 flex + 5 hall + 3 accel + 3 gyro
+#define EI_NUM_FEATURES         21  // 5 flex + 5 hall + 5 hall_top + 3 accel + 3 gyro

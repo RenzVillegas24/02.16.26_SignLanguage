@@ -197,13 +197,18 @@ void cb_test_hall(lv_event_t *e) {
     populate_test_detail(); nav_to(scr_test_detail, true);
 }
 
-void cb_test_battery(lv_event_t *e) {
+void cb_test_hall_top(lv_event_t *e) {
     (void)e; test_active = 4;
     populate_test_detail(); nav_to(scr_test_detail, true);
 }
 
-void cb_test_speaker(lv_event_t *e) {
+void cb_test_battery(lv_event_t *e) {
     (void)e; test_active = 5;
+    populate_test_detail(); nav_to(scr_test_detail, true);
+}
+
+void cb_test_speaker(lv_event_t *e) {
+    (void)e; test_active = 6;
     populate_test_detail(); nav_to(scr_test_detail, true);
     if (s_test_speaker_cb) s_test_speaker_cb();
 }

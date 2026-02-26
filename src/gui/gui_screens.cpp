@@ -106,12 +106,12 @@ void build_local() {
 
     // ── Sensor bars container ──
     bars_container = lv_obj_create(cont);
-    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10);
+    lv_obj_set_size(bars_container, BTN_W, 15 * 20 + 10);
     lv_obj_set_style_bg_opa(bars_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bars_container, 0, 0);
     lv_obj_set_style_pad_all(bars_container, 0, 0);
     lv_obj_clear_flag(bars_container, LV_OBJ_FLAG_SCROLLABLE);
-    create_bars(bars_container, bar_flex, bar_hall, 0);
+    create_bars(bars_container, bar_flex, bar_hall, bar_hall_top, 0);
     if (!cfg_local_sensors) lv_obj_add_flag(bars_container, LV_OBJ_FLAG_HIDDEN);
 
     add_back_gesture(scr_local, cb_btn_back_predict);
@@ -248,6 +248,7 @@ void build_test() {
     mk_nav_btn(cont, LV_SYMBOL_LOOP           " MPU6050",      cb_test_mpu);
     mk_nav_btn(cont, LV_SYMBOL_MINUS          " Flex Sensor",  cb_test_flex);
     mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Effect",  cb_test_hall);
+    mk_nav_btn(cont, LV_SYMBOL_GPS            " Hall Top",     cb_test_hall_top);
     mk_nav_btn(cont, LV_SYMBOL_BATTERY_FULL   " Battery",      cb_test_battery);
     mk_nav_btn(cont, LV_SYMBOL_VOLUME_MAX     " Speaker",      cb_test_speaker);
 
@@ -366,7 +367,7 @@ void populate_test_detail() {
     int t = test_active;
 
     // Update header title — test_names[] now include LV_SYMBOL prefixes
-    if (lbl_test_title && t >= 0 && t < 6)
+    if (lbl_test_title && t >= 0 && t < 7)
         lv_label_set_text(lbl_test_title, test_names[t]);
 
     // Hide all optional rows first
@@ -409,12 +410,20 @@ void populate_test_detail() {
         break;
     case 3:
         lv_label_set_text(lbl_test_detail,
-            "Hall Effect Test\n\n"
+            "Hall Effect (side) Test\n\n"
             "Reading channels...\n"
             "Move magnets near sensors.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
-    case 4: {
+    case 4:
+        lv_label_set_text(lbl_test_detail,
+            "Hall Effect (top) Test\n\n"
+            "Reading channels...\n"
+            "Top-of-finger sensors.\n"
+            "(Placeholder calibration)");
+        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
+        break;
+    case 5: {
         char buf[160];
         snprintf(buf, sizeof(buf),
             "Battery Test\n\n"
@@ -427,7 +436,7 @@ void populate_test_detail() {
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     }
-    case 5:
+    case 6:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n\n"
             "Playing tone...\n"

@@ -46,6 +46,7 @@ h2{font-size:1rem;color:#888;margin:12px 0 6px}
 .bar-lbl{font-size:.7rem;color:#999;margin-top:4px}
 .flex .bar-inner{background:#0cf}
 .hall .bar-inner{background:#f80}
+.hall-top .bar-inner{background:#0f8}
 #imu{font-size:.85rem;color:#aaa;margin-top:14px;text-align:center}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;
      margin-right:6px}
@@ -60,8 +61,11 @@ h2{font-size:1rem;color:#888;margin:12px 0 6px}
 <h2>Flex Sensors</h2>
 <div class="bars flex" id="flex-bars"></div>
 
-<h2>Hall Sensors</h2>
+<h2>Hall Sensors (Side)</h2>
 <div class="bars hall" id="hall-bars"></div>
+
+<h2>Hall Sensors (Top)</h2>
+<div class="bars hall-top" id="hall-top-bars"></div>
 
 <div id="imu"></div>
 <div id="status"><span class="dot off" id="dot"></span>Connecting&hellip;</div>
@@ -77,7 +81,7 @@ function makeBars(id){
     c.appendChild(w);
   });
 }
-makeBars('flex-bars');makeBars('hall-bars');
+makeBars('flex-bars');makeBars('hall-bars');makeBars('hall-top-bars');
 
 const gest=document.getElementById('gesture');
 const imu=document.getElementById('imu');
@@ -96,6 +100,7 @@ function connect(){
       FINGERS.forEach((f,i)=>{
         document.getElementById('flex-bars-'+f).style.height=(d.f[i]/4095*100).toFixed(1)+'%';
         document.getElementById('hall-bars-'+f).style.height=(d.h[i]/4095*100).toFixed(1)+'%';
+        document.getElementById('hall-top-bars-'+f).style.height=(d.ht[i]/4095*100).toFixed(1)+'%';
       });
       imu.innerHTML='Pitch: '+d.p.toFixed(1)+'&deg; &nbsp; Roll: '+d.r.toFixed(1)+'&deg;';
     }catch(err){}
@@ -191,15 +196,17 @@ void web_server_update(const SensorData &d, const char *gesture) {
     server.handleClient();          // pump HTTP state machine
 
     // Build compact JSON
-    char buf[256];
+    char buf[384];
     snprintf(buf, sizeof(buf),
         "{\"g\":\"%s\","
         "\"f\":[%u,%u,%u,%u,%u],"
         "\"h\":[%u,%u,%u,%u,%u],"
+        "\"ht\":[%u,%u,%u,%u,%u],"
         "\"p\":%.1f,\"r\":%.1f}",
         gesture ? gesture : "---",
         d.flex[0], d.flex[1], d.flex[2], d.flex[3], d.flex[4],
         d.hall[0], d.hall[1], d.hall[2], d.hall[3], d.hall[4],
+        d.hall_top[0], d.hall_top[1], d.hall_top[2], d.hall_top[3], d.hall_top[4],
         d.pitch, d.roll);
 
     sse_broadcast(String(buf));

@@ -19,12 +19,16 @@
 #include "power.h"
 #include "web_server.h"
 #include "system_info.h"
+#include "sensor_module/sensor_module.h"
+#include "test_sensors_module.h"
+#include "test_sound_module.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  State
 // ════════════════════════════════════════════════════════════════════
 static AppMode   current_mode  = MODE_MENU;
 static SensorData sensor_data  = {};
+static ProcessedSensorData processed_data = {};
 static char      gesture_text[32] = "---";
 static uint32_t  last_sensor   = 0;
 static uint32_t  last_display  = 0;
@@ -67,13 +71,13 @@ static void on_brightness_change(uint8_t val) {
 }
 
 static void on_volume_change(uint8_t val) {
-    // Volume is stored in gui state; just log for now
-    Serial.printf("[MAIN] Volume → %d\n", val);
+    audio_set_volume(val / 100.0f);
+    Serial.printf("[MAIN] Volume → %d%%\n", val);
 }
 
 static void on_test_speaker() {
-    audio_play_tone(1000, 500);   // 1 kHz, 500 ms beep
-    Serial.println("[MAIN] Speaker test tone");
+    test_sound_quick_beep();
+    Serial.println("[MAIN] Speaker test tone (via test module)");
 }
 
 static void on_test_oled() {
@@ -87,8 +91,9 @@ static void on_test_oled() {
 //  Edge Impulse serial streaming (TRAIN mode)
 // ════════════════════════════════════════════════════════════════════
 static void train_serial_output() {
-    // Format: flex0,flex1,..,flex4,hall0,..,hall4,ax,ay,az,gx,gy,gz
+    // Format: flex0,..,flex4,hall0,..,hall4,hall_top0,..,hall_top4,ax,ay,az,gx,gy,gz
     Serial.printf("%u,%u,%u,%u,%u,"
+                  "%u,%u,%u,%u,%u,"
                   "%u,%u,%u,%u,%u,"
                   "%.2f,%.2f,%.2f,"
                   "%.2f,%.2f,%.2f\n",
@@ -96,35 +101,19 @@ static void train_serial_output() {
         sensor_data.flex[3], sensor_data.flex[4],
         sensor_data.hall[0], sensor_data.hall[1], sensor_data.hall[2],
         sensor_data.hall[3], sensor_data.hall[4],
+        sensor_data.hall_top[0], sensor_data.hall_top[1], sensor_data.hall_top[2],
+        sensor_data.hall_top[3], sensor_data.hall_top[4],
         sensor_data.accel_x, sensor_data.accel_y, sensor_data.accel_z,
         sensor_data.gyro_x,  sensor_data.gyro_y,  sensor_data.gyro_z);
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Simple gesture placeholder
-//  (replace with Edge Impulse classifier or rule-based logic later)
+//  Gesture classification via sensor_module
+//  (uses sensor_module_predict — currently rule-based, future EI)
 // ════════════════════════════════════════════════════════════════════
 static void classify_gesture() {
-    // Placeholder: fist detection (all flex sensors above threshold)
-    bool all_bent = true;
-    for (int i = 0; i < 5; i++) {
-        if (sensor_data.flex[i] < 2500) { all_bent = false; break; }
-    }
-    if (all_bent) {
-        strncpy(gesture_text, "FIST", sizeof(gesture_text));
-    }
-    // Open hand (all flex sensors low)
-    else {
-        bool all_open = true;
-        for (int i = 0; i < 5; i++) {
-            if (sensor_data.flex[i] > 1500) { all_open = false; break; }
-        }
-        if (all_open) {
-            strncpy(gesture_text, "OPEN HAND", sizeof(gesture_text));
-        } else {
-            strncpy(gesture_text, "---", sizeof(gesture_text));
-        }
-    }
+    const char *label = sensor_module_predict(processed_data);
+    strncpy(gesture_text, label, sizeof(gesture_text));
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -152,8 +141,13 @@ void setup() {
     sensors_init();
     Serial.println("[MAIN] Sensors ready");
 
+    // 3b. Sensor processing module (calibration, percentages, prediction)
+    sensor_module_init();
+    Serial.println("[MAIN] Sensor module ready");
+
     // 4. Audio
     audio_init();
+    audio_set_volume(gui_get_volume() / 100.0f);   // apply saved volume
     Serial.println("[MAIN] Audio ready");
 
     // 5. Power
@@ -193,6 +187,7 @@ void loop() {
     if (now - last_sensor >= SENSOR_READ_INTERVAL_MS) {
         last_sensor = now;
         sensors_read(sensor_data);
+        sensor_module_process(sensor_data, processed_data);
         power_reset_idle_timer();
     }
 
@@ -239,10 +234,10 @@ void loop() {
         break;
 
     case MODE_TEST:
-        // Continuously feed sensor data to test screen
+        // Continuously feed processed sensor data to test screen
         if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
-            gui_test_update(sensor_data);
+            gui_test_update(sensor_data, processed_data);
         }
         break;
 

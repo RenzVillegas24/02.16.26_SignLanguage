@@ -6,6 +6,7 @@
 #include "gui_internal.h"
 #include "gui/gui.h"
 #include "system_info.h"
+#include "test_sensors_module.h"
 #include <Preferences.h>
 
 // ════════════════════════════════════════════════════════════════════
@@ -28,6 +29,7 @@ lv_obj_t *lbl_gesture      = nullptr;
 
 lv_obj_t *bar_flex[5]      = {};
 lv_obj_t *bar_hall[5]      = {};
+lv_obj_t *bar_hall_top[5]  = {};
 lv_obj_t *bars_container   = nullptr;
 
 lv_obj_t *slider_brightness= nullptr;
@@ -89,6 +91,7 @@ const char *test_names[] = {
     LV_SYMBOL_LOOP         " MPU6050",
     LV_SYMBOL_MINUS        " Flex Sensor",
     LV_SYMBOL_GPS          " Hall Effect",
+    LV_SYMBOL_GPS          " Hall Top",
     LV_SYMBOL_BATTERY_FULL " Battery",
     LV_SYMBOL_VOLUME_MAX   " Speaker"
 };
@@ -182,44 +185,36 @@ void gui_update(const SensorData &d) {
         for (int i = 0; i < 5; i++) {
             lv_bar_set_value(bar_flex[i], d.flex[i], LV_ANIM_OFF);
             lv_bar_set_value(bar_hall[i], d.hall[i], LV_ANIM_OFF);
+            lv_bar_set_value(bar_hall_top[i], d.hall_top[i], LV_ANIM_OFF);
         }
     }
 }
 
-void gui_test_update(const SensorData &d) {
+void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
     if (cur_gui_mode != MODE_TEST || !lbl_test_detail) return;
-    char buf[200];
+    char buf[320];
     switch (test_active) {
     case 0:
         lv_label_set_text(lbl_test_detail,
             "OLED Test\n\n" LV_SYMBOL_OK " Display OK\nNo artifacts detected.");
         break;
     case 1:
-        snprintf(buf, sizeof(buf),
-            "MPU6050 Live Data\n\n"
-            "Accel: %.1f  %.1f  %.1f m/s2\n"
-            "Gyro:  %.1f  %.1f  %.1f d/s\n"
-            "Pitch: %.1f  Roll: %.1f",
-            d.accel_x, d.accel_y, d.accel_z,
-            d.gyro_x, d.gyro_y, d.gyro_z,
-            d.pitch, d.roll);
+        test_sensors_format_mpu(pd, buf, sizeof(buf));
         lv_label_set_text(lbl_test_detail, buf);
         break;
     case 2:
-        snprintf(buf, sizeof(buf),
-            "Flex Sensors (raw ADC)\n\n"
-            "Thumb:  %u\nIndex:  %u\nMiddle: %u\nRing:   %u\nPinky:  %u",
-            d.flex[0], d.flex[1], d.flex[2], d.flex[3], d.flex[4]);
+        test_sensors_format_flex(pd, buf, sizeof(buf));
         lv_label_set_text(lbl_test_detail, buf);
         break;
     case 3:
-        snprintf(buf, sizeof(buf),
-            "Hall Sensors (raw ADC)\n\n"
-            "Thumb:  %u\nIndex:  %u\nMiddle: %u\nRing:   %u\nPinky:  %u",
-            d.hall[0], d.hall[1], d.hall[2], d.hall[3], d.hall[4]);
+        test_sensors_format_hall(pd, buf, sizeof(buf));
         lv_label_set_text(lbl_test_detail, buf);
         break;
-    case 4: {
+    case 4:
+        test_sensors_format_hall_top(pd, buf, sizeof(buf));
+        lv_label_set_text(lbl_test_detail, buf);
+        break;
+    case 5: {
         char vbuf[120];
         snprintf(vbuf, sizeof(vbuf),
             "Battery Test\n\n"
@@ -231,7 +226,7 @@ void gui_test_update(const SensorData &d) {
         lv_label_set_text(lbl_test_detail, vbuf);
         break;
     }
-    case 5:
+    case 6:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n\n"
             LV_SYMBOL_OK " Tone played\n"
@@ -239,6 +234,13 @@ void gui_test_update(const SensorData &d) {
         break;
     default:
         break;
+    }
+
+    // Also dump to Serial for diagnostics
+    static uint32_t last_serial = 0;
+    if (millis() - last_serial >= 500) {
+        last_serial = millis();
+        sensor_module_print_serial(pd);
     }
 }
 
@@ -263,7 +265,7 @@ void gui_set_battery(int pct) {
     if (bat_label)
         lv_label_set_text(bat_label, buf);
 
-    if (cur_gui_mode == MODE_TEST && test_active == 4 && lbl_test_detail) {
+    if (cur_gui_mode == MODE_TEST && test_active == 5 && lbl_test_detail) {
         char vbuf[120];
         snprintf(vbuf, sizeof(vbuf),
             "Battery Test\n\n"

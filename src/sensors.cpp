@@ -106,9 +106,20 @@ void sensors_read(SensorData &d) {
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
         d.flex[i] = mux_read(MUX_CH_FLEX_THUMB + i);
     }
-    // Read hall sensors (C5-C9)
+    // Read hall sensors — side (C8-C12)
     for (int i = 0; i < NUM_HALL_SENSORS; i++) {
         d.hall[i] = mux_read(MUX_CH_HALL_THUMB + i);
+    }
+    // Read hall sensors — top (C3,C4,C5,C13,C14)
+    {
+        static const uint8_t ht_ch[NUM_HALL_TOP_SENSORS] = {
+            MUX_CH_HALL_TOP_THUMB,  MUX_CH_HALL_TOP_INDEX,
+            MUX_CH_HALL_TOP_MIDDLE, MUX_CH_HALL_TOP_RING,
+            MUX_CH_HALL_TOP_PINKY
+        };
+        for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+            d.hall_top[i] = mux_read(ht_ch[i]);
+        }
     }
 
     // Read MPU6050
