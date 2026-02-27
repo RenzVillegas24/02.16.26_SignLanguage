@@ -158,6 +158,7 @@ extern lv_obj_t *btn_spk_pause;    // Pause / Resume toggle
 extern lv_obj_t *btn_spk_stop;     // Stop
 
 extern lv_obj_t *bat_label;
+extern lv_obj_t *charge_label;        // ⚡ charging indicator
 extern lv_obj_t *cpu_label;
 extern lv_obj_t *stat_bar;
 

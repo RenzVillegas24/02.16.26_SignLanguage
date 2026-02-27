@@ -7,6 +7,7 @@
 #include "gui/gui.h"
 #include "system_info.h"
 #include "test_sensors_module.h"
+#include "power.h"
 #include <Preferences.h>
 
 // ════════════════════════════════════════════════════════════════════
@@ -82,6 +83,7 @@ lv_obj_t *btn_spk_pause    = nullptr;
 lv_obj_t *btn_spk_stop     = nullptr;
 
 lv_obj_t *bat_label = nullptr;
+lv_obj_t *charge_label = nullptr;
 lv_obj_t *cpu_label = nullptr;
 lv_obj_t *stat_bar  = nullptr;
 
@@ -293,7 +295,10 @@ void gui_set_gesture(const char *text) {
 
 void gui_set_battery(int pct) {
     bat_pct_cache = pct;
-    bat_voltage_v = BAT_EMPTY_V + (pct / 100.0f) * (BAT_FULL_V - BAT_EMPTY_V);
+    // Use the accurate SY6970 voltage when available
+    float real_v  = power_battery_voltage();   // SY6970 mV → V (or ADC fallback)
+    bat_voltage_v = (real_v > 0.1f) ? real_v
+                  : BAT_EMPTY_V + (pct / 100.0f) * (BAT_FULL_V - BAT_EMPTY_V);
 
     char buf[32];
     const char *icon;
@@ -309,16 +314,33 @@ void gui_set_battery(int pct) {
         lv_label_set_text(bat_label, buf);
 
     if (cur_gui_mode == MODE_TEST && test_active == 5 && lbl_test_detail) {
-        char vbuf[120];
+        int input_mv  = power_input_voltage_mv();
+        int charge_ma = power_charging_current_ma();
+        char vbuf[200];
         snprintf(vbuf, sizeof(vbuf),
             "Battery Test\n\n"
             "%s %d%%\n"
-            "Voltage: %.2fV\n\n"
+            "Voltage: %.3f V\n"
+            "Input:   %d mV\n"
+            "Current: %d mA\n\n"
+            "Charging: %s\n"
             "Status: %s",
-            icon, pct, bat_voltage_v,
-            pct > 20 ? "OK" : "LOW");
+            icon, pct,
+            bat_voltage_v,
+            input_mv,
+            charge_ma,
+            (power_is_charging() || power_usb_connected()) ? "Yes" : "No",
+            power_charging_status_str());
         lv_label_set_text(lbl_test_detail, vbuf);
     }
+}
+
+void gui_set_charging(bool charging) {
+    if (!charge_label) return;
+    if (charging)
+        lv_obj_clear_flag(charge_label, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(charge_label, LV_OBJ_FLAG_HIDDEN);
 }
 
 void gui_show_web_qr(const char *url) {

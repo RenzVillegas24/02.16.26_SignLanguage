@@ -170,6 +170,14 @@ void build_status_bar() {
     lv_obj_set_style_text_font(bat_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(bat_label, tc->hdr_text, 0);
     lv_obj_align(bat_label, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    // Charging bolt indicator — positioned just left of the battery label
+    charge_label = lv_label_create(stat_bar);
+    lv_label_set_text(charge_label, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_font(charge_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(charge_label, lv_color_hex(0xFFD700), 0);  // gold/yellow
+    lv_obj_align_to(charge_label, bat_label, LV_ALIGN_OUT_LEFT_MID, -2, 0);
+    lv_obj_add_flag(charge_label, LV_OBJ_FLAG_HIDDEN);  // hidden by default
 }
 
 // ════════════════════════════════════════════════════════════════════

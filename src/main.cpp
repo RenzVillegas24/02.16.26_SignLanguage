@@ -249,10 +249,11 @@ void loop() {
         break;
     }
 
-    // ── Battery indicator (all modes) ──────────────────────────────
+    // ── Battery & charging indicator (all modes) ────────────────────
     if (now - last_bat_read >= BATTERY_READ_INTERVAL_MS) {
         last_bat_read = now;
         gui_set_battery(power_battery_percent());
+        gui_set_charging(power_is_charging() || power_usb_connected());
     }
 
     // ── CPU usage tracking ─────────────────────────────────────────
