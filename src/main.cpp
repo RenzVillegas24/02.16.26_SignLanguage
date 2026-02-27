@@ -250,6 +250,12 @@ void loop() {
     }
 
     // ── Battery & charging indicator (all modes) ────────────────────
+    // Immediate update on USB plug / unplug (edge detected by background task)
+    if (power_usb_state_changed()) {
+        gui_set_charging(power_is_charging() || power_usb_connected());
+        gui_set_battery(power_battery_percent());
+    }
+    // Periodic refresh for normal battery % drift
     if (now - last_bat_read >= BATTERY_READ_INTERVAL_MS) {
         last_bat_read = now;
         gui_set_battery(power_battery_percent());

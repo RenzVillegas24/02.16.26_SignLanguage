@@ -100,7 +100,7 @@ struct SensorData {
 // ─────────────────────────────────────────────
 #define SENSOR_READ_INTERVAL_MS     50
 #define DISPLAY_UPDATE_INTERVAL_MS  100
-#define BATTERY_READ_INTERVAL_MS    5000
+#define BATTERY_READ_INTERVAL_MS    2000
 #define TRAIN_SERIAL_INTERVAL_MS    50
 #define POWER_BTN_DEBOUNCE_MS       300
 #define AUTO_SLEEP_TIMEOUT_MS       60000   // 60 seconds

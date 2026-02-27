@@ -15,9 +15,10 @@ void  power_deep_sleep();
 void  power_reset_idle_timer();
 
 // ── SY6970 charger status ──────────────────────────────────────────
-bool  power_is_charging();         // true when Pre-charge or Fast Charging
-bool  power_usb_connected();       // true when any input source detected
+bool  power_is_charging();           // true when Pre-charge or Fast Charging
+bool  power_usb_connected();         // true when any input source detected
+bool  power_usb_state_changed();     // true once per USB plug/unplug edge (clears on read)
 const char *power_charging_status_str();  // human-readable status
-int   power_battery_voltage_mv();  // battery voltage from SY6970 (mV)
-int   power_input_voltage_mv();    // USB/input voltage from SY6970 (mV)
-int   power_charging_current_ma(); // charging current (mA)
+int   power_battery_voltage_mv();    // battery voltage from SY6970 (mV)
+int   power_input_voltage_mv();      // USB/input voltage from SY6970 (mV)
+int   power_charging_current_ma();   // charging current (mA)

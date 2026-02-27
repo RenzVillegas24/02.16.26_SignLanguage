@@ -462,59 +462,68 @@ void sensor_module_process(const SensorData &raw, ProcessedSensorData &out) {
 }
 
 void sensor_module_print_serial(const ProcessedSensorData &pd) {
-    Serial.println("─── Flex Sensors ───────────────────────");
+    // Build entire output in a single buffer, then one Serial.write().
+    // This avoids ~50 individual Serial.print() calls which block the main
+    // loop on ESP32-S3 USB CDC when a terminal is connected.
+    static char buf[1200];
+    int o = 0;
+    const int N = sizeof(buf);
+
+    o += snprintf(buf + o, N - o, "─── Flex Sensors ───────────────────────\n");
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        Serial.printf("  %-6s: %4d  ", finger_names[i], pd.flex_raw[i]);
+        o += snprintf(buf + o, N - o, "  %-6s: %4d  ", finger_names[i], pd.flex_raw[i]);
         if (pd.flex_pct[i] > 0)
-            Serial.printf("▲ %3d%% Up\n", (int)pd.flex_pct[i]);
+            o += snprintf(buf + o, N - o, "▲ %3d%% Up\n", (int)pd.flex_pct[i]);
         else if (pd.flex_pct[i] < 0)
-            Serial.printf("▼ %3d%% Down\n", (int)abs(pd.flex_pct[i]));
+            o += snprintf(buf + o, N - o, "▼ %3d%% Down\n", (int)abs(pd.flex_pct[i]));
         else
-            Serial.println("● Flat");
+            o += snprintf(buf + o, N - o, "● Flat\n");
     }
-    Serial.println("─── Hall (side) [Back ◄──|──► Front] ───");
+    o += snprintf(buf + o, N - o, "─── Hall (side) [Back ◄──|──► Front] ───\n");
     for (int i = 0; i < NUM_HALL_SENSORS; i++) {
-        Serial.printf("  %-6s: %4d  ", finger_names[i], pd.hall_raw[i]);
+        o += snprintf(buf + o, N - o, "  %-6s: %4d  ", finger_names[i], pd.hall_raw[i]);
         if (pd.hall_pct[i] > 5)
-            Serial.printf("▲ %3d%% Front\n", (int)pd.hall_pct[i]);
+            o += snprintf(buf + o, N - o, "▲ %3d%% Front\n", (int)pd.hall_pct[i]);
         else if (pd.hall_pct[i] < -5)
-            Serial.printf("▼ %3d%% Back\n", (int)abs(pd.hall_pct[i]));
+            o += snprintf(buf + o, N - o, "▼ %3d%% Back\n", (int)abs(pd.hall_pct[i]));
         else
-            Serial.println("● Normal");
+            o += snprintf(buf + o, N - o, "● Normal\n");
     }
-    Serial.println("─── Hall (top) [Back ◄──|──► Front] ────");
+    o += snprintf(buf + o, N - o, "─── Hall (top) [Back ◄──|──► Front] ────\n");
     for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        Serial.printf("  %-6s: %4d  ", finger_names[i], pd.hall_top_raw[i]);
+        o += snprintf(buf + o, N - o, "  %-6s: %4d  ", finger_names[i], pd.hall_top_raw[i]);
         if (pd.hall_top_pct[i] > 5)
-            Serial.printf("▲ %3d%% Front\n", (int)pd.hall_top_pct[i]);
+            o += snprintf(buf + o, N - o, "▲ %3d%% Front\n", (int)pd.hall_top_pct[i]);
         else if (pd.hall_top_pct[i] < -5)
-            Serial.printf("▼ %3d%% Back\n", (int)abs(pd.hall_top_pct[i]));
+            o += snprintf(buf + o, N - o, "▼ %3d%% Back\n", (int)abs(pd.hall_top_pct[i]));
         else
-            Serial.println("● Normal");
+            o += snprintf(buf + o, N - o, "● Normal\n");
     }
     if (pd.accel_x != 0 || pd.accel_y != 0 || pd.accel_z != 0) {
-        Serial.println("─── MPU6050 IMU ────────────────────────");
-        Serial.printf("  Accel:  X=%7.3f  Y=%7.3f  Z=%7.3f  m/s²\n",
+        o += snprintf(buf + o, N - o, "─── MPU6050 IMU ────────────────────────\n");
+        o += snprintf(buf + o, N - o, "  Accel:  X=%7.3f  Y=%7.3f  Z=%7.3f  m/s²\n",
                       pd.accel_x, pd.accel_y, pd.accel_z);
-        Serial.printf("  Gyro:   X=%7.2f  Y=%7.2f  Z=%7.2f  °/s\n",
+        o += snprintf(buf + o, N - o, "  Gyro:   X=%7.2f  Y=%7.2f  Z=%7.2f  °/s\n",
                       pd.gyro_x, pd.gyro_y, pd.gyro_z);
-        Serial.printf("  Angles: Pitch=%6.1f°  Roll=%6.1f°\n",
+        o += snprintf(buf + o, N - o, "  Angles: Pitch=%6.1f°  Roll=%6.1f°\n",
                       pd.pitch, pd.roll);
     }
 
     // CSV line
-    Serial.print("[CSV] ");
+    o += snprintf(buf + o, N - o, "[CSV] ");
     for (int i = 0; i < NUM_FLEX_SENSORS; i++)
-        Serial.printf("F%d:%d,FP%d:%d,", i, pd.flex_raw[i], i, (int)pd.flex_pct[i]);
+        o += snprintf(buf + o, N - o, "F%d:%d,FP%d:%d,", i, pd.flex_raw[i], i, (int)pd.flex_pct[i]);
     for (int i = 0; i < NUM_HALL_SENSORS; i++)
-        Serial.printf("H%d:%d,HP%d:%d,", i, pd.hall_raw[i], i, (int)pd.hall_pct[i]);
+        o += snprintf(buf + o, N - o, "H%d:%d,HP%d:%d,", i, pd.hall_raw[i], i, (int)pd.hall_pct[i]);
     for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-        Serial.printf("HT%d:%d,HTP%d:%d,", i, pd.hall_top_raw[i], i, (int)pd.hall_top_pct[i]);
-    Serial.printf("AX:%.2f,AY:%.2f,AZ:%.2f,GX:%.2f,GY:%.2f,GZ:%.2f,P:%.1f,R:%.1f\n",
+        o += snprintf(buf + o, N - o, "HT%d:%d,HTP%d:%d,", i, pd.hall_top_raw[i], i, (int)pd.hall_top_pct[i]);
+    o += snprintf(buf + o, N - o, "AX:%.2f,AY:%.2f,AZ:%.2f,GX:%.2f,GY:%.2f,GZ:%.2f,P:%.1f,R:%.1f\n\n",
                   pd.accel_x, pd.accel_y, pd.accel_z,
                   pd.gyro_x, pd.gyro_y, pd.gyro_z,
                   pd.pitch, pd.roll);
-    Serial.println();
+
+    // One write — avoids per-call USB CDC overhead
+    if (o > 0) Serial.write(buf, (o < N) ? o : N - 1);
 }
 
 void sensor_module_format_oled(const ProcessedSensorData &pd,
