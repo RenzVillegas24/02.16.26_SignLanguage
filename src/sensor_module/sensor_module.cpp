@@ -11,8 +11,17 @@
 //  Tunables
 // ─────────────────────────────────────────────
 #define CALIBRATION_TIME_MS    5000
-#define FLEX_EMA_ALPHA         0.3f
-#define BASELINE_ADAPT_ALPHA   0.005f
+#define FLEX_EMA_ALPHA         0.15f   // Lowered for smoother output (was 0.3)
+#define BASELINE_ADAPT_ALPHA   0.002f  // Slowed down to avoid fighting intentional movement
+
+// Max calibration samples stored for stddev computation
+#define MAX_CAL_SAMPLES        128
+
+// Deadzone limits: stddev * DZ_SIGMA_MULT, clamped to [DZ_MIN, DZ_MAX]
+// Tight cap prevents the old min/max blow-up that killed responsiveness
+#define DZ_SIGMA_MULT          2.5f
+#define DZ_MIN                 4
+#define DZ_MAX                 18
 
 // ─────────────────────────────────────────────
 //  Mux channel tables (mirrors config.h defines)
@@ -137,7 +146,7 @@ static uint16_t mux_read_oversampled(uint8_t ch) {
 static int8_t calc_flex_pct(int idx, uint16_t raw) {
     if (!flex_cal[idx].calibrated) return 0;
 
-    // EMA smoothing
+    // EMA low-pass filter (alpha lowered for smoother signal)
     if (!flex_ema_init) {
         flex_ema[idx] = (float)raw;
     } else {
@@ -148,7 +157,7 @@ static int8_t calc_flex_pct(int idx, uint16_t raw) {
     int16_t diff = smoothed - (int16_t)flex_cal[idx].flat_value;
     int16_t dz   = (int16_t)flex_cal[idx].noise_deadzone;
 
-    // Inside deadzone → flat, slowly adapt baseline
+    // Inside deadzone → flat; very slowly adapt baseline for thermal drift
     if (abs(diff) <= dz) {
         float nf = (float)flex_cal[idx].flat_value +
                    BASELINE_ADAPT_ALPHA *
@@ -157,16 +166,16 @@ static int8_t calc_flex_pct(int idx, uint16_t raw) {
         return 0;
     }
 
+    // Map over the FULL calibrated range (deadzone is only a threshold,
+    // not subtracted from the denominator — that was the old bug).
     if (diff > 0) {
-        int16_t eff = diff - dz;
-        int16_t er  = (int16_t)flex_cal[idx].upward_range - dz;
-        if (er <= 0) er = 1;
-        return (int8_t)constrain((eff * 100) / er, 0, 100);
+        int16_t range = (int16_t)flex_cal[idx].upward_range;
+        if (range <= 0) range = 1;
+        return (int8_t)constrain((diff * 100) / range, 0, 100);
     } else {
-        int16_t eff = abs(diff) - dz;
-        int16_t er  = (int16_t)flex_cal[idx].downward_range - dz;
-        if (er <= 0) er = 1;
-        return (int8_t)constrain((eff * 100) / er * -1, -100, 0);
+        int16_t range = (int16_t)flex_cal[idx].downward_range;
+        if (range <= 0) range = 1;
+        return (int8_t)constrain((diff * 100) / range, -100, 0);
     }
 }
 
@@ -216,12 +225,12 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
     Serial.println("║  the sensors for 5 seconds...          ║");
     Serial.println("╚════════════════════════════════════════╝");
 
-    uint32_t flex_acc[NUM_FLEX_SENSORS]         = {0};
     uint32_t hall_acc[NUM_HALL_SENSORS]          = {0};
     uint32_t hall_top_acc[NUM_HALL_TOP_SENSORS]  = {0};
-    uint16_t flex_min[NUM_FLEX_SENSORS], flex_max[NUM_FLEX_SENSORS];
 
-    for (int i = 0; i < NUM_FLEX_SENSORS; i++) { flex_min[i] = 4095; flex_max[i] = 0; }
+    // Per-sample buffers for flex stddev (capped at MAX_CAL_SAMPLES)
+    uint16_t flex_samples[NUM_FLEX_SENSORS][MAX_CAL_SAMPLES];
+    memset(flex_samples, 0, sizeof(flex_samples));
 
     uint32_t t0 = millis();
     uint16_t n  = 0;
@@ -229,9 +238,7 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
     while (millis() - t0 < CALIBRATION_TIME_MS) {
         for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
             uint16_t v = mux_read_oversampled(flex_channels[i]);
-            flex_acc[i] += v;
-            if (v < flex_min[i]) flex_min[i] = v;
-            if (v > flex_max[i]) flex_max[i] = v;
+            if (n < MAX_CAL_SAMPLES) flex_samples[i][n] = v;
         }
         for (int i = 0; i < NUM_HALL_SENSORS; i++)
             hall_acc[i] += mux_read_oversampled(hall_channels[i]);
@@ -245,13 +252,25 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
         if (n % 20 == 0) Serial.print(".");
         delay(50);
     }
+    uint16_t n_flex = (n < MAX_CAL_SAMPLES) ? n : MAX_CAL_SAMPLES;
 
     // Store calibration
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        flex_cal[i].flat_value     = flex_acc[i] / n;
-        uint16_t noise             = flex_max[i] - flex_min[i];
-        flex_cal[i].noise_deadzone = noise * 2;
-        flex_cal[i].calibrated     = true;
+        // Mean from stored samples (more accurate than running accumulator for stddev)
+        uint32_t sum = 0;
+        for (uint16_t s = 0; s < n_flex; s++) sum += flex_samples[i][s];
+        flex_cal[i].flat_value = (uint16_t)(sum / n_flex);
+
+        // Stddev-based deadzone — far tighter and more accurate than min/max * 2
+        uint32_t var_sum = 0;
+        for (uint16_t s = 0; s < n_flex; s++) {
+            int32_t d = (int32_t)flex_samples[i][s] - (int32_t)flex_cal[i].flat_value;
+            var_sum += (uint32_t)(d * d);
+        }
+        float stddev = sqrtf((float)var_sum / n_flex);
+        flex_cal[i].noise_deadzone = (uint16_t)constrain(
+            (int)(stddev * DZ_SIGMA_MULT + 0.5f), DZ_MIN, DZ_MAX);
+        flex_cal[i].calibrated = true;
         flex_ema[i] = (float)flex_cal[i].flat_value;
     }
     flex_ema_init = true;

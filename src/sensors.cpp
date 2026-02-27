@@ -102,9 +102,15 @@ void sensors_init() {
 bool sensors_mpu_available() { return mpu_ok; }
 
 void sensors_read(SensorData &d) {
-    // Read flex sensors (C0-C4)
+    // Read flex sensors — non-sequential channels (0,1,2,6,7).
+    // Ring and Pinky are on ch6/ch7; ch3-ch5 are Hall Top sensors.
+    // Using the same lookup table as sensor_module to stay in sync.
+    static const uint8_t flex_ch[NUM_FLEX_SENSORS] = {
+        MUX_CH_FLEX_THUMB,  MUX_CH_FLEX_INDEX,  MUX_CH_FLEX_MIDDLE,
+        MUX_CH_FLEX_RING,   MUX_CH_FLEX_PINKY
+    };
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        d.flex[i] = mux_read(MUX_CH_FLEX_THUMB + i);
+        d.flex[i] = mux_read(flex_ch[i]);
     }
     // Read hall sensors — side (C8-C12)
     for (int i = 0; i < NUM_HALL_SENSORS; i++) {
