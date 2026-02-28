@@ -262,7 +262,7 @@ static void start_real_calibration() {
 // ════════════════════════════════════════════════════════════════════
 //  Speaker test — step-by-step FreeRTOS task with pause/stop
 // ════════════════════════════════════════════════════════════════════
-#define SPK_NUM_STEPS 10
+#define SPK_NUM_STEPS 9
 
 struct SpeakerStep {
     const char *name;
@@ -278,7 +278,6 @@ static const SpeakerStep s_spk_steps[SPK_NUM_STEPS] = {
     {"Melody",                test_sound_melody},
     {"Extreme Frequencies",   test_sound_extreme_frequencies},
     {"Rapid Jumps",           test_sound_rapid_jumps},
-    {"WAV Playback",          test_sound_wav_playback},
     {"MP3 Playback",          test_sound_mp3_playback},
 };
 

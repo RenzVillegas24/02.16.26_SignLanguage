@@ -5,7 +5,7 @@
  *        - Sine-wave tone generation  (with fade envelope)
  *        - Frequency chirp (linear sweep)
  *        - Beep patterns
- *        - WAV file streaming from SPIFFS
+ *        - MP3 file streaming from SPIFFS
  */
 #include "audio.h"
 #include "config.h"
@@ -218,7 +218,7 @@ void audio_play_beeps(uint16_t freq_hz, uint16_t beep_ms, uint16_t pause_ms, uin
 }
 
 // ─────────────────────────────────────────────
-//  WAV File Playback (SPIFFS)
+//  WAV File Playback (SPIFFS) [DEPRECATED]
 // ─────────────────────────────────────────────
 bool audio_play_wav(const char* filepath) {
     if (!s_installed) return false;

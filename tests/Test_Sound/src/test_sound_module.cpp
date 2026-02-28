@@ -109,12 +109,6 @@ void test_sound_rapid_jumps() {
     }
 }
 
-// ── WAV Playback ─────────────────────────────
-void test_sound_wav_playback() {
-    Serial.println("\n══ WAV Playback ══");
-    audio_play_wav_dir("/audios");
-}
-
 // ── MP3 Playback ─────────────────────────────
 void test_sound_mp3_playback() {
     Serial.println("\n══ MP3 Playback ══");
@@ -143,7 +137,6 @@ void test_sound_run_all() {
     test_sound_melody();              delay(1000);
     test_sound_extreme_frequencies(); delay(1000);
     test_sound_rapid_jumps();         delay(1000);
-    test_sound_wav_playback();        delay(1000);
     test_sound_mp3_playback();        delay(1000);
 
     audio_set_volume(saved_vol);

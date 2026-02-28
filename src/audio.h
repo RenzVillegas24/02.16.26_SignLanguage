@@ -1,6 +1,6 @@
 /*
  * @file audio.h
- * @brief I2S audio output via MAX98357A (tone generation + WAV playback)
+ * @brief I2S audio output via MAX98357A (tone generation + MP3 playback)
  *
  * Pin config (from config.h):
  *   I2S_BCLK = 40 | I2S_LRCK = 41 | I2S_DOUT = 42
@@ -64,12 +64,6 @@ void audio_play_beeps(uint16_t freq_hz, uint16_t beep_ms, uint16_t pause_ms, uin
 // ─────────────────────────────────────────────
 typedef bool (*audio_poll_fn)();
 void audio_set_poll(audio_poll_fn fn);   // register / clear the poll hook
-
-// ─────────────────────────────────────────────
-//  WAV File Playback  (SPIFFS)
-// ─────────────────────────────────────────────
-bool audio_play_wav(const char* filepath);          // play a single .wav file
-void audio_play_wav_dir(const char* dirpath);       // play all .wav files in a dir
 
 // ─────────────────────────────────────────────
 //  MP3 File Playback  (SPIFFS, via minimp3)

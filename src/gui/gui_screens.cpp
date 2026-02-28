@@ -499,7 +499,7 @@ void build_test_detail() {
     // Progress bar (0 to 9)
     spk_prog_bar = lv_bar_create(spk_panel);
     lv_obj_set_size(spk_prog_bar, BTN_W - 24, 12);
-    lv_bar_set_range(spk_prog_bar, 0, 10);
+    lv_bar_set_range(spk_prog_bar, 0, 9);
     lv_bar_set_value(spk_prog_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(spk_prog_bar, tc->slider_track, LV_PART_MAIN);
     lv_obj_set_style_bg_color(spk_prog_bar, accent_primary(), LV_PART_INDICATOR);
@@ -634,7 +634,7 @@ void populate_test_detail() {
     case 6:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n"
-            "10 audio tests in sequence.\n"
+            "9 audio tests in sequence.\n"
             "Adjust volume below.");
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         // Show speaker controls
