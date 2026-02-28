@@ -5,13 +5,14 @@
  *        - Sine-wave tone generation  (with fade envelope)
  *        - Frequency chirp (linear sweep)
  *        - Beep patterns
- *        - MP3 file streaming from SPIFFS
+ *        - MP3 file streaming from LittleFS
  */
 #include "audio.h"
 #include "config.h"
 #include "driver/i2s.h"
-#include "SPIFFS.h"
+#include "LittleFS.h"
 #include <math.h>
+#include <vector>
 
 // minimp3 — single-header, public-domain (CC0) MP3 decoder
 // https://github.com/lieff/minimp3
@@ -218,12 +219,12 @@ void audio_play_beeps(uint16_t freq_hz, uint16_t beep_ms, uint16_t pause_ms, uin
 }
 
 // ─────────────────────────────────────────────
-//  WAV File Playback (SPIFFS) [DEPRECATED]
+//  WAV File Playback (LittleFS) [DEPRECATED]
 // ─────────────────────────────────────────────
 bool audio_play_wav(const char* filepath) {
     if (!s_installed) return false;
 
-    File file = SPIFFS.open(filepath, "r");
+    File file = LittleFS.open(filepath, "r");
     if (!file) {
         Serial.printf("[AUDIO] Cannot open: %s\n", filepath);
         return false;
@@ -365,15 +366,15 @@ bool audio_play_wav(const char* filepath) {
 }
 
 void audio_play_wav_dir(const char* dirpath) {
-    if (!SPIFFS.begin(true)) {
-        Serial.println("[AUDIO] SPIFFS mount failed");
+    if (!LittleFS.begin(true)) {
+        Serial.println("[AUDIO] LittleFS mount failed");
         return;
     }
 
-    File root = SPIFFS.open(dirpath);
+    File root = LittleFS.open(dirpath);
     if (!root || !root.isDirectory()) {
         Serial.printf("[AUDIO] Directory not found: %s\n", dirpath);
-        SPIFFS.end();
+        LittleFS.end();
         return;
     }
 
@@ -383,11 +384,21 @@ void audio_play_wav_dir(const char* dirpath) {
     File entry = root.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) {
-            String name = String(entry.name());
-            name.toLowerCase();
-            if (name.endsWith(".wav")) {
+            String fname = String(entry.name());
+
+            String fullpath;
+            if (fname.startsWith("/")) {
+                fullpath = fname;
+            } else {
+                String dir = String(dirpath);
+                if (!dir.endsWith("/")) dir += "/";
+                fullpath = dir + fname;
+            }
+
+            String lower = fullpath;
+            lower.toLowerCase();
+            if (lower.endsWith(".wav")) {
                 count++;
-                String fullpath = String(dirpath) + "/" + String(entry.name());
                 Serial.printf("\n[AUDIO] Track %d — %s\n", count, fullpath.c_str());
                 audio_play_wav(fullpath.c_str());
                 delay(500);
@@ -401,11 +412,11 @@ void audio_play_wav_dir(const char* dirpath) {
     else
         Serial.printf("[AUDIO] Played %d WAV file(s)\n", count);
 
-    SPIFFS.end();
+    LittleFS.end();
 }
 
 // ─────────────────────────────────────────────
-//  MP3 File Playback (SPIFFS, via minimp3)
+//  MP3 File Playback (LittleFS, via minimp3)
 //
 //  Streaming decoder: reads MP3 in small chunks,
 //  decodes frame-by-frame, and sends PCM to I2S.
@@ -421,7 +432,7 @@ void audio_play_wav_dir(const char* dirpath) {
 bool audio_play_mp3(const char* filepath) {
     if (!s_installed) return false;
 
-    File file = SPIFFS.open(filepath, "r");
+    File file = LittleFS.open(filepath, "r");
     if (!file) {
         Serial.printf("[AUDIO] Cannot open: %s\n", filepath);
         return false;
@@ -566,42 +577,61 @@ bool audio_play_mp3(const char* filepath) {
     return true;
 }
 
-void audio_play_mp3_dir(const char* dirpath) {
-    if (!SPIFFS.begin(true)) {
-        Serial.println("[AUDIO] SPIFFS mount failed");
-        return;
-    }
+// ── Recursive helper: collects all .mp3 paths into a list ───────────
+static void mp3_collect_recursive(const String& dirpath, std::vector<String>& out) {
+    File dir = LittleFS.open(dirpath);
+    if (!dir || !dir.isDirectory()) return;
 
-    File root = SPIFFS.open(dirpath);
-    if (!root || !root.isDirectory()) {
-        Serial.printf("[AUDIO] Directory not found: %s\n", dirpath);
-        SPIFFS.end();
-        return;
-    }
-
-    Serial.printf("[AUDIO] Scanning %s for MP3 files...\n", dirpath);
-
-    int count = 0;
-    File entry = root.openNextFile();
+    File entry = dir.openNextFile();
     while (entry) {
-        if (!entry.isDirectory()) {
-            String name = String(entry.name());
-            name.toLowerCase();
-            if (name.endsWith(".mp3")) {
-                count++;
-                String fullpath = String(dirpath) + "/" + String(entry.name());
-                Serial.printf("\n[AUDIO] Track %d — %s\n", count, fullpath.c_str());
-                audio_play_mp3(fullpath.c_str());
-                delay(500);
-            }
+        String name = String(entry.name());
+        String fullpath = dirpath;
+        if (!fullpath.endsWith("/")) fullpath += "/";
+        fullpath += name;
+
+        if (entry.isDirectory()) {
+            mp3_collect_recursive(fullpath, out);   // recurse first, no decode yet
+        } else {
+            String lower = name;
+            lower.toLowerCase();
+            if (lower.endsWith(".mp3"))
+                out.push_back(fullpath);
         }
-        entry = root.openNextFile();
+        entry = dir.openNextFile();
+    }
+}
+
+void audio_play_mp3_dir(const char* dirpath) {
+    if (!LittleFS.begin(true)) {
+        Serial.println("[AUDIO] LittleFS mount failed");
+        return;
     }
 
-    if (count == 0)
-        Serial.printf("[AUDIO] No MP3 files found in %s\n", dirpath);
-    else
-        Serial.printf("[AUDIO] Played %d MP3 file(s)\n", count);
+    Serial.printf("[AUDIO] Scanning %s (recursive) for MP3 files...\n", dirpath);
 
-    SPIFFS.end();
+    // Phase 1 — collect paths (no decode happens here, stack stays shallow)
+    std::vector<String> tracks;
+    mp3_collect_recursive(String(dirpath), tracks);
+
+    LittleFS.end();   // release FS handle before decoding
+
+    if (tracks.empty()) {
+        Serial.printf("[AUDIO] No MP3 files found under %s\n", dirpath);
+        return;
+    }
+
+    // Phase 2 — play each track (decode runs at this call depth, no recursion above it)
+    Serial.printf("[AUDIO] Found %d MP3 file(s), starting playback...\n", (int)tracks.size());
+    for (int i = 0; i < (int)tracks.size(); i++) {
+        Serial.printf("\n[AUDIO] Track %d/%d — %s\n", i + 1, (int)tracks.size(), tracks[i].c_str());
+
+        // Re-mount for each open (or keep mounted — either works with LittleFS)
+        if (!LittleFS.begin(true)) {
+            Serial.println("[AUDIO] LittleFS mount failed");
+            break;
+        }
+        audio_play_mp3(tracks[i].c_str());
+        LittleFS.end();
+        delay(500);
+    }
 }

@@ -66,7 +66,7 @@ typedef bool (*audio_poll_fn)();
 void audio_set_poll(audio_poll_fn fn);   // register / clear the poll hook
 
 // ─────────────────────────────────────────────
-//  MP3 File Playback  (SPIFFS, via minimp3)
+//  MP3 File Playback  (LittleFS, via minimp3)
 //  No external library required — uses the
 //  public-domain minimp3 single-header decoder.
 // ─────────────────────────────────────────────

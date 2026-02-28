@@ -3,7 +3,7 @@
  * @brief Comprehensive audio test suite — utilises test_sound_module
  *        for all test functions. Delegates to: musical scale, sweeps,
  *        beep patterns, freq steps, volume fade, melody, extreme
- *        frequencies, rapid jumps, and WAV playback from SPIFFS /audios.
+ *        frequencies, rapid jumps, and MP3 playback from LittleFS /audios.
  */
 #include <Arduino.h>
 #include "audio.h"

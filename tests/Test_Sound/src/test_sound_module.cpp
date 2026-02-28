@@ -112,7 +112,7 @@ void test_sound_rapid_jumps() {
 // ── MP3 Playback ─────────────────────────────
 void test_sound_mp3_playback() {
     Serial.println("\n══ MP3 Playback ══");
-    audio_play_mp3_dir("/audios");
+    audio_play_mp3_dir("/");
 }
 
 // ── Quick beep ───────────────────────────────

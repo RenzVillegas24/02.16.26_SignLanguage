@@ -367,7 +367,7 @@ static void start_speaker_test() {
         return (bool)spk_stop_req;
     });
 
-    xTaskCreatePinnedToCore(speaker_task_fn, "spk", 24576, nullptr, 1,
+    xTaskCreatePinnedToCore(speaker_task_fn, "spk", 40960, nullptr, 1,
                             &spk_task_handle, 1);
 
     if (spk_poll_timer) lv_timer_del(spk_poll_timer);
