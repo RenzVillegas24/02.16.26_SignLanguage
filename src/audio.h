@@ -70,3 +70,11 @@ void audio_set_poll(audio_poll_fn fn);   // register / clear the poll hook
 // ─────────────────────────────────────────────
 bool audio_play_wav(const char* filepath);          // play a single .wav file
 void audio_play_wav_dir(const char* dirpath);       // play all .wav files in a dir
+
+// ─────────────────────────────────────────────
+//  MP3 File Playback  (SPIFFS, via minimp3)
+//  No external library required — uses the
+//  public-domain minimp3 single-header decoder.
+// ─────────────────────────────────────────────
+bool audio_play_mp3(const char* filepath);          // play a single .mp3 file
+void audio_play_mp3_dir(const char* dirpath);       // play all .mp3 files in a dir

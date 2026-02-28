@@ -13,6 +13,13 @@
 #include "SPIFFS.h"
 #include <math.h>
 
+// minimp3 — single-header, public-domain (CC0) MP3 decoder
+// https://github.com/lieff/minimp3
+#define MINIMP3_IMPLEMENTATION
+#define MINIMP3_ONLY_MP3
+#define MINIMP3_NO_SIMD
+#include "minimp3.h"
+
 // ─────────────────────────────────────────────
 //  Constants
 // ─────────────────────────────────────────────
@@ -393,6 +400,208 @@ void audio_play_wav_dir(const char* dirpath) {
         Serial.printf("[AUDIO] No WAV files found in %s\n", dirpath);
     else
         Serial.printf("[AUDIO] Played %d WAV file(s)\n", count);
+
+    SPIFFS.end();
+}
+
+// ─────────────────────────────────────────────
+//  MP3 File Playback (SPIFFS, via minimp3)
+//
+//  Streaming decoder: reads MP3 in small chunks,
+//  decodes frame-by-frame, and sends PCM to I2S.
+//  No external library needed — minimp3 is a
+//  single public-domain header included above.
+// ─────────────────────────────────────────────
+
+// Size of the file-read ring buffer.  Must hold at least one full
+// MP3 frame (max 1441 bytes for 320 kbps @ 44.1 kHz) plus some
+// look-ahead so minimp3 can always find the next sync word.
+#define MP3_INBUF_SIZE  (1024 * 8)   // 8 KB – comfortably fits ≥4 frames
+
+bool audio_play_mp3(const char* filepath) {
+    if (!s_installed) return false;
+
+    File file = SPIFFS.open(filepath, "r");
+    if (!file) {
+        Serial.printf("[AUDIO] Cannot open: %s\n", filepath);
+        return false;
+    }
+
+    const size_t file_size = file.size();
+    Serial.printf("[AUDIO] MP3  %s  (%u bytes)\n", filepath, (unsigned)file_size);
+
+    // ── Allocate buffers ──
+    uint8_t* inbuf = (uint8_t*)malloc(MP3_INBUF_SIZE);
+    // MINIMP3_MAX_SAMPLES_PER_FRAME = 1152*2 (stereo)
+    int16_t* pcm   = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
+    int16_t* mono   = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
+    if (!inbuf || !pcm || !mono) {
+        Serial.println("[AUDIO] MP3 malloc failed");
+        if (inbuf) free(inbuf);
+        if (pcm)   free(pcm);
+        if (mono)   free(mono);
+        file.close();
+        return false;
+    }
+
+    // ── Initialise decoder ──
+    mp3dec_t dec;
+    mp3dec_init(&dec);
+
+    s_playing = true;
+    unsigned long t0     = millis();
+    size_t buf_bytes     = 0;        // valid bytes currently in inbuf
+    size_t buf_offset    = 0;        // read cursor inside inbuf
+    bool   eof           = false;
+    bool   first_frame   = true;
+    uint32_t last_rate   = 0;        // to detect sample-rate changes
+
+    while (s_playing) {
+        // Poll hook
+        if (s_poll_fn && s_poll_fn()) break;
+
+        // ── Refill input buffer ──
+        // Shift unconsumed bytes to the front, then top-up from file
+        if (buf_offset > 0 && buf_bytes > buf_offset) {
+            memmove(inbuf, inbuf + buf_offset, buf_bytes - buf_offset);
+            buf_bytes -= buf_offset;
+        } else if (buf_offset > 0) {
+            buf_bytes = 0;
+        }
+        buf_offset = 0;
+
+        if (!eof && buf_bytes < MP3_INBUF_SIZE) {
+            size_t want = MP3_INBUF_SIZE - buf_bytes;
+            size_t got  = file.read(inbuf + buf_bytes, want);
+            if (got == 0) eof = true;
+            buf_bytes += got;
+        }
+
+        if (buf_bytes == 0) break;   // nothing left to decode
+
+        // ── Decode one frame ──
+        mp3dec_frame_info_t info;
+        int samples = mp3dec_decode_frame(&dec, inbuf + buf_offset,
+                                          buf_bytes, pcm, &info);
+
+        if (info.frame_bytes == 0) {
+            // No valid sync found in remaining data — we're done
+            break;
+        }
+        buf_offset += info.frame_bytes;
+
+        if (samples == 0) {
+            // Skipped frame (ID3 tag, garbage) — keep going
+            continue;
+        }
+
+        // ── First valid frame: configure I2S to match ──
+        if (first_frame) {
+            first_frame = false;
+            last_rate   = info.hz;
+            Serial.printf("        %d Hz | %d ch | %d kbps\n",
+                          info.hz, info.channels, info.bitrate_kbps);
+
+            if ((uint32_t)info.hz != SAMPLE_RATE) {
+                i2s_driver_uninstall(I2S_PORT);
+                s_installed = false;
+                i2s_install(info.hz);
+            }
+        }
+
+        // ── Handle mid-stream sample-rate change (rare) ──
+        if ((uint32_t)info.hz != last_rate) {
+            last_rate = info.hz;
+            i2s_driver_uninstall(I2S_PORT);
+            s_installed = false;
+            i2s_install(info.hz);
+        }
+
+        // ── Convert to mono + apply volume gain ──
+        size_t out_samples;
+        if (info.channels == 2) {
+            out_samples = samples / 2;   // samples is total (L+R interleaved)
+            for (size_t i = 0; i < out_samples; i++) {
+                int32_t l = pcm[i * 2];
+                int32_t r = pcm[i * 2 + 1];
+                mono[i] = (int16_t)(((l + r) / 2) * s_gain);
+            }
+        } else {
+            out_samples = samples;
+            for (size_t i = 0; i < out_samples; i++) {
+                mono[i] = (int16_t)(pcm[i] * s_gain);
+            }
+        }
+
+        // ── Send PCM to I2S ──
+        size_t bytes_written;
+        i2s_write(I2S_PORT, mono, out_samples * sizeof(int16_t),
+                  &bytes_written, portMAX_DELAY);
+    }
+
+    // ── Clean up ──
+    free(inbuf);
+    free(pcm);
+    free(mono);
+    file.close();
+
+    // Drain DMA buffers
+    uint32_t rate = last_rate ? last_rate : SAMPLE_RATE;
+    uint32_t dma_samples = DMA_BUF_COUNT * DMA_BUF_LEN;
+    uint32_t drain_ms = (dma_samples * 1000UL) / rate + 50;
+    delay(drain_ms);
+
+    i2s_zero_dma_buffer(I2S_PORT);
+    s_playing = false;
+
+    Serial.printf("        Done  (%.1f s)\n", (millis() - t0) / 1000.0f);
+
+    // Restore default sample rate
+    if (last_rate != 0 && last_rate != SAMPLE_RATE) {
+        i2s_driver_uninstall(I2S_PORT);
+        s_installed = false;
+        i2s_install(SAMPLE_RATE);
+    }
+
+    return true;
+}
+
+void audio_play_mp3_dir(const char* dirpath) {
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[AUDIO] SPIFFS mount failed");
+        return;
+    }
+
+    File root = SPIFFS.open(dirpath);
+    if (!root || !root.isDirectory()) {
+        Serial.printf("[AUDIO] Directory not found: %s\n", dirpath);
+        SPIFFS.end();
+        return;
+    }
+
+    Serial.printf("[AUDIO] Scanning %s for MP3 files...\n", dirpath);
+
+    int count = 0;
+    File entry = root.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            String name = String(entry.name());
+            name.toLowerCase();
+            if (name.endsWith(".mp3")) {
+                count++;
+                String fullpath = String(dirpath) + "/" + String(entry.name());
+                Serial.printf("\n[AUDIO] Track %d — %s\n", count, fullpath.c_str());
+                audio_play_mp3(fullpath.c_str());
+                delay(500);
+            }
+        }
+        entry = root.openNextFile();
+    }
+
+    if (count == 0)
+        Serial.printf("[AUDIO] No MP3 files found in %s\n", dirpath);
+    else
+        Serial.printf("[AUDIO] Played %d MP3 file(s)\n", count);
 
     SPIFFS.end();
 }

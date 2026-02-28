@@ -58,6 +58,7 @@ void test_sound_frequency_steps() {
 // ── Volume Fade ──────────────────────────────
 void test_sound_volume_fade() {
     Serial.println("\n══ Volume Fade ══");
+    float restore_vol = audio_get_volume();   // remember caller's volume
     Serial.println("  Fade in");
     for (float v = 0.05f; v <= 1.0f; v += 0.05f) {
         audio_set_volume(v);
@@ -69,7 +70,7 @@ void test_sound_volume_fade() {
         audio_set_volume(v);
         audio_play_tone(NOTE_A4, 200);
     }
-    audio_set_volume(TEST_VOLUME);
+    audio_set_volume(restore_vol);   // restore to whatever the caller had set
 }
 
 // ── Melody ───────────────────────────────────
@@ -114,6 +115,12 @@ void test_sound_wav_playback() {
     audio_play_wav_dir("/audios");
 }
 
+// ── MP3 Playback ─────────────────────────────
+void test_sound_mp3_playback() {
+    Serial.println("\n══ MP3 Playback ══");
+    audio_play_mp3_dir("/audios");
+}
+
 // ── Quick beep ───────────────────────────────
 void test_sound_quick_beep() {
     audio_play_tone(1000, 500);
@@ -137,6 +144,7 @@ void test_sound_run_all() {
     test_sound_extreme_frequencies(); delay(1000);
     test_sound_rapid_jumps();         delay(1000);
     test_sound_wav_playback();        delay(1000);
+    test_sound_mp3_playback();        delay(1000);
 
     audio_set_volume(saved_vol);
 

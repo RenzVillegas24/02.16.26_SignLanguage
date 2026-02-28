@@ -24,6 +24,7 @@ void test_sound_melody();
 void test_sound_extreme_frequencies();
 void test_sound_rapid_jumps();
 void test_sound_wav_playback();
+void test_sound_mp3_playback();
 
 /// Quick speaker verification — plays a 1 kHz beep (blocking, ~0.5 s)
 void test_sound_quick_beep();

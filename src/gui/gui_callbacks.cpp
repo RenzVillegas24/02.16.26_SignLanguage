@@ -262,7 +262,7 @@ static void start_real_calibration() {
 // ════════════════════════════════════════════════════════════════════
 //  Speaker test — step-by-step FreeRTOS task with pause/stop
 // ════════════════════════════════════════════════════════════════════
-#define SPK_NUM_STEPS 9
+#define SPK_NUM_STEPS 10
 
 struct SpeakerStep {
     const char *name;
@@ -279,6 +279,7 @@ static const SpeakerStep s_spk_steps[SPK_NUM_STEPS] = {
     {"Extreme Frequencies",   test_sound_extreme_frequencies},
     {"Rapid Jumps",           test_sound_rapid_jumps},
     {"WAV Playback",          test_sound_wav_playback},
+    {"MP3 Playback",          test_sound_mp3_playback},
 };
 
 // Volatile state — written by task, read by LVGL poll timer
@@ -307,7 +308,13 @@ static void spk_poll_timer_cb(lv_timer_t *t) {
 
 static void speaker_task_fn(void *param) {
     (void)param;
-    float saved_vol = audio_get_volume();
+
+    // Use the volume the user has set in the GUI slider throughout the test.
+    // Re-read cfg_volume before every step so a mid-test slider change takes
+    // effect immediately, and restore it after each step to undo any
+    // side-effects from test_sound_volume_fade.
+    float gui_vol = cfg_volume / 100.0f;
+    audio_set_volume(gui_vol);
 
     for (int i = 0; i < SPK_NUM_STEPS; i++) {
         if (spk_stop_req) break;
@@ -316,15 +323,22 @@ static void speaker_task_fn(void *param) {
         while (spk_paused && !spk_stop_req) { vTaskDelay(pdMS_TO_TICKS(50)); }
         if (spk_stop_req) break;
 
+        // Refresh GUI volume before each step (slider may have moved)
+        gui_vol = cfg_volume / 100.0f;
+        audio_set_volume(gui_vol);
+
         spk_step_idx = i;
         Serial.printf("\n[SPK] Step %d/%d: %s\n", i + 1, SPK_NUM_STEPS, s_spk_steps[i].name);
         s_spk_steps[i].fn();
+
+        // Restore GUI volume after each step — the fade test intentionally
+        // varies volume, so this brings it back to the user-selected level.
+        audio_set_volume(gui_vol);
 
         // Brief pause between tests (also allows stop to be caught)
         for (int w = 0; w < 10 && !spk_stop_req; w++) vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    audio_set_volume(saved_vol);
     audio_set_poll(nullptr);      // clear the pause/stop hook
     spk_running   = false;
     spk_done_flag = !spk_stop_req;
@@ -354,7 +368,7 @@ static void start_speaker_test() {
         return (bool)spk_stop_req;
     });
 
-    xTaskCreatePinnedToCore(speaker_task_fn, "spk", 4096, nullptr, 1,
+    xTaskCreatePinnedToCore(speaker_task_fn, "spk", 24576, nullptr, 1,
                             &spk_task_handle, 1);
 
     if (spk_poll_timer) lv_timer_del(spk_poll_timer);

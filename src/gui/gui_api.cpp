@@ -517,7 +517,7 @@ void refresh_calib_info_label() {
 //  Reads extern volatile state exposed by gui_callbacks.cpp.
 // ════════════════════════════════════════════════════════════════════
 extern volatile int   spk_step_idx;   // 0-based current step
-extern volatile int   spk_num_steps;  // total steps (9)
+extern volatile int   spk_num_steps;  // total steps (10)
 extern volatile bool  spk_paused;
 extern volatile bool  spk_running;
 extern volatile bool  spk_done_flag;
