@@ -162,6 +162,10 @@ extern lv_obj_t *charge_label;        // ⚡ charging indicator
 extern lv_obj_t *cpu_label;
 extern lv_obj_t *stat_bar;
 
+// Power menu dialog widgets (on lv_layer_top)
+extern lv_obj_t *power_overlay;       // Full-screen semi-transparent backdrop
+extern lv_obj_t *power_dialog;        // Centred dialog card
+
 // ════════════════════════════════════════════════════════════════════
 //  Styles
 // ════════════════════════════════════════════════════════════════════
@@ -199,6 +203,10 @@ extern void (*s_test_speaker_cb)();
 extern void (*s_test_oled_cb)();
 extern void (*s_brightness_cb)(uint8_t);
 extern void (*s_volume_cb)(uint8_t);
+
+// Power action callback (set by main.cpp via gui_register_power_cb)
+#include "gui.h"  // for PowerAction enum
+extern void (*s_power_cb)(PowerAction);
 
 // ════════════════════════════════════════════════════════════════════
 //  Internal functions — theme
@@ -256,6 +264,7 @@ void build_test();
 void build_test_sensors();
 void build_test_detail();
 void build_status_bar();
+void build_power_menu();
 void populate_test_detail();
 void show_calibration_dialog();
 void hide_calibration_dialog();
@@ -311,6 +320,12 @@ void cb_spk_stop(lv_event_t *e);
 
 void cb_benchmark(lv_event_t *e);
 bool is_bench_running();
+
+// Power menu callbacks
+void cb_power_sleep(lv_event_t *e);
+void cb_power_shutdown(lv_event_t *e);
+void cb_power_restart(lv_event_t *e);
+void cb_power_cancel(lv_event_t *e);
 
 // Calibration info helper — updates lbl_calib_info with real values
 void refresh_calib_info_label();

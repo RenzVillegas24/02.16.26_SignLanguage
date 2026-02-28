@@ -51,7 +51,7 @@
 // ─────────────────────────────────────────────
 //  Power & Battery
 // ─────────────────────────────────────────────
-#define PIN_POWER_BTN   38                          // Momentary button → GND (sleep/wake)
+#define PIN_POWER_BTN   2                           // Momentary button → GND (sleep/wake)
 #define PIN_BAT_ADC     BATTERY_VOLTAGE_ADC_DATA    // Battery voltage ADC (internal)
 
 // Battery voltage conversion (voltage divider on board)

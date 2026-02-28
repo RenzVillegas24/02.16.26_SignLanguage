@@ -675,3 +675,79 @@ void update_calibration_progress(int pct) {
         lv_label_set_text(calib_lbl, LV_SYMBOL_OK " Calibration Complete!\n\nReady to test sensors.");
     }
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  Power Menu Dialog  (overlay on lv_layer_top, above everything)
+// ════════════════════════════════════════════════════════════════════
+void build_power_menu() {
+    lv_obj_t *top = lv_layer_top();
+
+    // ── Full-screen semi-transparent backdrop ──
+    power_overlay = lv_obj_create(top);
+    lv_obj_set_size(power_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(power_overlay, 0, 0);
+    lv_obj_set_style_bg_color(power_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(power_overlay, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(power_overlay, 0, 0);
+    lv_obj_set_style_radius(power_overlay, 0, 0);
+    lv_obj_clear_flag(power_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Centred dialog card ──
+    power_dialog = lv_obj_create(power_overlay);
+    lv_obj_set_size(power_dialog, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_align(power_dialog, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(power_dialog, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(power_dialog, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(power_dialog, 16, 0);
+    lv_obj_set_style_border_width(power_dialog, 0, 0);
+    lv_obj_set_style_pad_all(power_dialog, 16, 0);
+    lv_obj_set_style_pad_row(power_dialog, 10, 0);
+    lv_obj_set_layout(power_dialog, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(power_dialog, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(power_dialog, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(power_dialog, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Title ──
+    lv_obj_t *title = lv_label_create(power_dialog);
+    lv_label_set_text(title, LV_SYMBOL_POWER " Power Menu");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, tc->card_text, 0);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(title, BTN_W - 32);
+
+    // ── Subtitle ──
+    lv_obj_t *sub = lv_label_create(power_dialog);
+    lv_label_set_text(sub, "Choose an action:");
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sub, tc->sub_text, 0);
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(sub, BTN_W - 32);
+
+    // Button width (inside card padding)
+    const int PW = BTN_W - 32;
+    const int PH = 46;
+
+    // ── Sleep button (light sleep — resumes on button press) ──
+    lv_obj_t *btn_sleep = mk_btn(power_dialog, LV_SYMBOL_EYE_CLOSE " Sleep", PW, PH, cb_power_sleep);
+    lv_obj_set_style_bg_color(btn_sleep, accent_dark(), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_sleep, 0), &lv_font_montserrat_16, 0);
+
+    // ── Shutdown button (deep sleep — resets on button press) ──
+    lv_obj_t *btn_shutdown = mk_btn(power_dialog, LV_SYMBOL_POWER " Shutdown", PW, PH, cb_power_shutdown);
+    lv_obj_set_style_bg_color(btn_shutdown, lv_color_make(0xAA, 0x22, 0x22), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_shutdown, 0), &lv_font_montserrat_16, 0);
+
+    // ── Restart button ──
+    lv_obj_t *btn_restart = mk_btn(power_dialog, LV_SYMBOL_REFRESH " Restart", PW, PH, cb_power_restart);
+    lv_obj_set_style_bg_color(btn_restart, lv_color_make(0xCC, 0x88, 0x00), 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_restart, 0), &lv_font_montserrat_16, 0);
+
+    // ── Cancel button ──
+    lv_obj_t *btn_cancel = mk_btn(power_dialog, LV_SYMBOL_CLOSE " Cancel", PW, PH, cb_power_cancel);
+    lv_obj_set_style_bg_color(btn_cancel, tc->back_btn_bg, 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_cancel, 0), &lv_font_montserrat_16, 0);
+
+    // ── Hidden by default ──
+    lv_obj_add_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}

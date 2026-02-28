@@ -43,6 +43,13 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd);
 void gui_update_calibration_progress(int pct);
 bool gui_is_calibrating();
 
+// Power menu dialog (overlay on lv_layer_top)
+enum PowerAction { PWR_NONE = 0, PWR_SLEEP, PWR_SHUTDOWN, PWR_RESTART, PWR_CANCEL };
+void gui_show_power_menu();
+void gui_hide_power_menu();
+bool gui_power_menu_visible();
+void gui_register_power_cb(void (*cb)(PowerAction));
+
 // Mode callback registration
 void gui_register_mode_callback(void (*cb)(AppMode));
 

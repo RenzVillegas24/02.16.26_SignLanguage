@@ -11,6 +11,7 @@
  *   web      →  WiFi AP + SSE server (WEB mode only)
  */
 #include <Arduino.h>
+#include <esp_sleep.h>
 #include "config.h"
 #include "display.h"
 #include "gui/gui.h"
@@ -60,6 +61,62 @@ static void on_mode_change(AppMode m) {
 
     Serial.printf("[MAIN] Mode → %d\n", (int)m);
     power_reset_idle_timer();
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Power menu callback (wired from GUI)
+// ════════════════════════════════════════════════════════════════════
+// IMPORTANT: The LVGL button callback fires INSIDE lv_timer_handler().
+// Calling esp_deep_sleep_start() / esp_light_sleep_start() or heavy
+// I/O (display_off, I2C) from within LVGL's event chain is unsafe —
+// LVGL holds internal state that can deadlock or corrupt.  Instead we
+// store the requested action and execute it in loop() AFTER
+// lv_timer_handler() has returned.
+static volatile PowerAction pending_power_action = PWR_NONE;
+
+static void on_power_action(PowerAction action) {
+    if (action == PWR_CANCEL) {
+        Serial.println("[MAIN] Power menu → Cancel");
+        return;   // nothing to defer
+    }
+    // Just record the action; execution happens in loop()
+    pending_power_action = action;
+}
+
+// Called from loop() outside LVGL to safely execute the power action
+static void execute_pending_power_action() {
+    PowerAction act = pending_power_action;
+    if (act == PWR_NONE) return;
+    pending_power_action = PWR_NONE;
+
+    switch (act) {
+    case PWR_SLEEP:
+        Serial.println("[MAIN] Power menu → Sleep (light sleep)");
+        audio_stop();
+        power_light_sleep();
+        // Execution resumes here after wakeup from light sleep
+        Serial.println("[MAIN] Resumed from light sleep");
+        break;
+
+    case PWR_SHUTDOWN:
+        Serial.println("[MAIN] Power menu → Shutdown (deep sleep)");
+        audio_stop();
+        if (web_server_is_running()) web_server_stop();
+        power_deep_sleep();
+        // Never reaches here — ESP resets on deep sleep wakeup
+        break;
+
+    case PWR_RESTART:
+        Serial.println("[MAIN] Power menu → Restart");
+        audio_stop();
+        if (web_server_is_running()) web_server_stop();
+        power_restart();
+        // Never reaches here
+        break;
+
+    default:
+        break;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -124,8 +181,23 @@ static void classify_gesture() {
 // ════════════════════════════════════════════════════════════════════
 void setup() {
     Serial.begin(EI_SERIAL_BAUD);
-    delay(200);
-    Serial.println("\n=== Signa v4.0 ===");
+    // With ARDUINO_USB_CDC_ON_BOOT=1, Serial is USB CDC.
+    // If no USB host is connected (e.g. wake from deep sleep without
+    // the serial monitor open), any Serial.print() call will block
+    // until the host connects — which never happens, freezing the boot.
+    // setTxTimeoutMs(0) makes every write return immediately if the
+    // host is absent, so the display (and everything else) still boots.
+    Serial.setTxTimeoutMs(0);
+
+    // Shorter delay on deep-sleep wakeup (boot is effectively a restart)
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ||
+        esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+        delay(50);
+        Serial.println("\n=== Signa v4.0 (wake) ===");
+    } else {
+        delay(200);
+        Serial.println("\n=== Signa v4.0 ===");
+    }
 
     // 1. Display + LVGL
     display_init();
@@ -138,6 +210,7 @@ void setup() {
     gui_register_volume_cb(on_volume_change);
     gui_register_test_speaker_cb(on_test_speaker);
     gui_register_test_oled_cb(on_test_oled);
+    gui_register_power_cb(on_power_action);
     Serial.println("[MAIN] GUI ready");
 
     // 3. Sensors
@@ -175,15 +248,27 @@ void loop() {
     // ── LVGL tick ──────────────────────────────────────────────────
     lv_timer_handler();
 
+    // ── Execute deferred power actions (MUST be outside LVGL) ──────
+    // The power menu callback only sets a flag; the actual sleep /
+    // deep-sleep / restart happens here, safely outside lv_timer_handler.
+    execute_pending_power_action();
+
     // ── Power management ───────────────────────────────────────────
     power_update();
 
-    if (power_button_pressed()) {
-        // Short press → deep sleep
-        audio_stop();
-        if (web_server_is_running()) web_server_stop();
-        display_off();
-        power_deep_sleep();
+    // Long press → show power menu dialog (Sleep / Shutdown / Restart / Cancel)
+    if (power_button_long_press() && !gui_power_menu_visible()) {
+        gui_show_power_menu();
+    }
+
+    // Short press while power menu is open → dismiss it
+    if (power_button_pressed() && gui_power_menu_visible()) {
+        gui_hide_power_menu();
+    }
+
+    // Short press while power menu is NOT open → immediate light sleep
+    if (power_button_pressed() && !gui_power_menu_visible()) {
+        pending_power_action = PWR_SLEEP;
     }
 
     // ── Read sensors ───────────────────────────────────────────────

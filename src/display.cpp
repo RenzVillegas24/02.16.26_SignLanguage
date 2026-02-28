@@ -4,6 +4,7 @@
  *        Based on LILYGO T-Display S3 AMOLED 1.64 examples
  */
 #include "display.h"
+#include "power.h"
 
 // ── Hardware objects ──────────────────────────
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -139,10 +140,14 @@ void display_init() {
     indev_drv.read_cb = lvgl_touch_cb;
     lv_indev_drv_register(&indev_drv);
 
-    // Fade in
-    for (int i = 0; i <= 255; i++) {
-        gfx->Display_Brightness(i);
-        delay(2);
+    // Fade in — fast path for deep-sleep wakeup
+    if (power_is_deep_sleep_wake()) {
+        gfx->Display_Brightness(200);       // instant on
+    } else {
+        for (int i = 0; i <= 255; i++) {
+            gfx->Display_Brightness(i);
+            delay(2);
+        }
     }
     Serial.println("[DISPLAY] LVGL ready");
 }
@@ -154,12 +159,27 @@ void display_set_brightness(uint8_t level) {
 void display_off() {
     gfx->Display_Brightness(0);
     gfx->displayOff();
+
+    // For light sleep: just power down the display, don't hardware reset it.
+    // MIPI DCS SLEEP IN (0x10) puts the CO5300 in sleep mode, preserving all
+    // configuration (pixel format, addressing, etc.). The IC draws minimal power.
+    // On light sleep wake, displayOn() just sends SLEEP OUT and we're back.
+    //
+    // For deep sleep / shutdown: the entire system will power-cycle anyway,
+    // so the hardware reset is a bonus. But it's not strictly necessary.
+    
+    // Cut display power to minimise standby current during light sleep
     digitalWrite(LCD_EN, LOW);
 }
 
 void display_on() {
+    // Restore display power and wake from sleep
     pinMode(LCD_EN, OUTPUT);
     digitalWrite(LCD_EN, HIGH);
+    delay(100);   // let LCD power rail stabilize
+
+    // Send MIPI DCS SLEEP OUT (0x11) to wake the CO5300 from sleep mode.
+    // All configuration (pixel format, addressing, etc.) is preserved.
     gfx->displayOn();
     gfx->Display_Brightness(200);
 }

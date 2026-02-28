@@ -1,13 +1,26 @@
 /*
  * @file power.cpp
- * @brief Power management — button debounce, SY6970 charger (background task), deep sleep
+ * @brief Power management — button debounce, SY6970 charger (background task),
+ *        light sleep, deep sleep (shutdown), restart
  *
  * SY6970 I2C reads run on Core 0 in a FreeRTOS task every 500 ms.
  * The main loop (Core 1) only reads mutex-protected cached values — no I2C blocking.
+ *
+ * Power button (PIN_POWER_BTN / GPIO 2):
+ *   Short press  — consumed by main.cpp (general use)
+ *   Long press   — consumed by main.cpp to show the power menu dialog
+ *
+ * Light sleep:  Display off → esp_light_sleep_start().
+ *               Button press wakes and resumes exactly where it left off.
+ * Deep sleep:   Display off → esp_deep_sleep_start().
+ *               Button press resets the ESP32 (full restart).
+ * Restart:      Calls esp_restart() immediately.
  */
 #include "power.h"
 #include "config.h"
+#include "display.h"
 #include "esp_sleep.h"
+#include "driver/rtc_io.h"
 #include "Arduino_DriveBus_Library.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -43,6 +56,22 @@ static bool     btn_long_fired  = false;
 // ── Idle / auto-sleep ──────────────────────────────────────────────
 static uint32_t idle_start = 0;
 #define IDLE_SLEEP_MS (5UL * 60 * 1000)   // 5 minutes
+
+// Flush serial with a hard timeout — ESP32-S3 USB CDC can block
+// indefinitely on Serial.flush() when no USB host is connected.
+static void serial_flush_safe(uint32_t timeout_ms = 50) {
+    uint32_t t0 = millis();
+    while ((millis() - t0) < timeout_ms) {
+        if (Serial.availableForWrite() >= 128) break;   // TX buffer drained
+        delay(1);
+    }
+}
+
+// ── Deep-sleep wakeup detection ────────────────────────────────────
+// Check the wakeup reason once at boot so startup code can fast-path.
+static bool _deep_sleep_wake = false;
+
+bool power_is_deep_sleep_wake() { return _deep_sleep_wake; }
 
 // ── Background SY6970 read task (Core 0, 500 ms period) ───────────
 static void pwr_read_task(void* /*arg*/) {
@@ -87,6 +116,13 @@ void power_init() {
     idle_start = millis();
 
     pinMode(PIN_POWER_BTN, INPUT_PULLUP);
+
+    // ── Detect deep-sleep wakeup ─────────────────────────────────
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    _deep_sleep_wake = (cause == ESP_SLEEP_WAKEUP_EXT0 ||
+                        cause == ESP_SLEEP_WAKEUP_EXT1);
+    if (_deep_sleep_wake)
+        Serial.println("[POWER] Boot reason: deep-sleep wakeup");
 
     // ── SY6970 charger init ──────────────────────────────────────
     if (sy6970->begin()) {
@@ -149,10 +185,10 @@ void power_update() {
     }
     btn_last = now;
 
-    // Idle auto-sleep
+    // Idle auto-sleep (light sleep after inactivity)
     if (btn_short || btn_long) power_reset_idle_timer();
     if (millis() - idle_start > IDLE_SLEEP_MS)
-        power_deep_sleep();
+        power_light_sleep();
 }
 
 bool power_button_pressed()    { return btn_short; }
@@ -233,12 +269,141 @@ int power_charging_current_ma() {
     return v;
 }
 
+// ── Light Sleep ────────────────────────────────────────────────────
+// Puts the ESP32 into light sleep. Execution pauses and resumes here
+// when the power button (PIN_POWER_BTN) is pressed.
+// Display and touch are powered down before sleep and restored after.
+
+// Shared helper: configure the wakeup GPIO for RTC domain.
+// During any sleep mode the GPIO matrix and normal pull-ups are
+// powered off, so we must use the RTC GPIO driver to keep the
+// pull-up alive and to register the ext0 wakeup source.
+static void _arm_wakeup_gpio() {
+    const gpio_num_t pin = (gpio_num_t)PIN_POWER_BTN;
+    // Route the GPIO pad into the RTC domain
+    rtc_gpio_init(pin);
+    rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+    // Enable RTC-domain pull-up so the pin stays HIGH when button is open
+    rtc_gpio_pullup_en(pin);
+    rtc_gpio_pulldown_dis(pin);
+    // Wake on LOW (button connects pin → GND)
+    esp_sleep_enable_ext0_wakeup(pin, 0);
+}
+
+void power_light_sleep() {
+    Serial.println("[POWER] Entering light sleep...");
+    serial_flush_safe();
+
+    // 1. Power down display
+    display_off();
+
+    // 2. Put touch controller into low-power monitor mode
+    if (touch_controller) {
+        touch_controller->IIC_Write_Device_State(
+            touch_controller->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
+            touch_controller->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
+        touch_controller->IIC_Write_Device_State(
+            touch_controller->Arduino_IIC_Touch::Device::TOUCH_AUTOMATICALLY_MONITOR_MODE,
+            touch_controller->Arduino_IIC_Touch::Device_State::TOUCH_DEVICE_ON);
+        touch_controller->IIC_Write_Device_Value(
+            touch_controller->Arduino_IIC_Touch::Device_Value::TOUCH_AUTOMATICALLY_MONITOR_TIME, 3);
+    }
+
+    // 3. Small settle delay — let I2C / QSPI finish
+    delay(100);
+
+    // 4. Arm wakeup GPIO (RTC pull-up + ext0 on LOW)
+    _arm_wakeup_gpio();
+
+    // 5. Enter light sleep — execution pauses here
+    esp_light_sleep_start();
+
+    // ── Woken up! ──────────────────────────────────────────────────
+    // Immediately release the RTC GPIO back to the normal GPIO matrix
+    // so digitalRead() works again.
+    rtc_gpio_deinit((gpio_num_t)PIN_POWER_BTN);
+    pinMode(PIN_POWER_BTN, INPUT_PULLUP);
+
+    Serial.println("[POWER] Woke from light sleep");
+
+    // 6. Wait for the wake-up button press to be fully released
+    //    (up to 3 s), then flush the debounce state so that the
+    //    physical press that woke us is NOT re-processed as a new
+    //    short/long press in the main loop.
+    uint32_t release_deadline = millis() + 3000;
+    while (digitalRead(PIN_POWER_BTN) == LOW && millis() < release_deadline) {
+        delay(10);
+    }
+    delay(50); // extra settle time
+
+    // Reset debounce state — treat the button as already released
+    btn_last       = HIGH;
+    btn_down_at    = 0;
+    btn_long_fired = false;
+    btn_short      = false;
+    btn_long       = false;
+
+    // 7. Restore display (with settling delay for LCD power rail)
+    delay(100);
+    display_on();
+
+    // 8. Restore touch controller to full active mode
+    if (touch_controller) {
+        touch_controller->IIC_Write_Device_State(
+            touch_controller->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
+            touch_controller->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_ACTIVE);
+        touch_controller->IIC_Write_Device_State(
+            touch_controller->Arduino_IIC_Touch::Device::TOUCH_AUTOMATICALLY_MONITOR_MODE,
+            touch_controller->Arduino_IIC_Touch::Device_State::TOUCH_DEVICE_OFF);
+    }
+
+    // 9. Reset idle timer so we don't immediately re-sleep
+    power_reset_idle_timer();
+}
+
+// ── Deep Sleep (Shutdown) ──────────────────────────────────────────
+// Puts the ESP32 into deep sleep. This is effectively a shutdown.
+// Pressing the power button triggers a full reset/restart.
 void power_deep_sleep() {
-    Serial.println("[POWER] Entering deep sleep");
-    Serial.flush();
-    digitalWrite(LCD_EN, LOW);
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_POWER_BTN, 0);
+    Serial.println("[POWER] Entering deep sleep (shutdown)...");
+    serial_flush_safe();
+
+    // 1. Power down display
+    display_off();
+
+    // 2. Put touch controller into low-power monitor mode
+    if (touch_controller) {
+        touch_controller->IIC_Write_Device_State(
+            touch_controller->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
+            touch_controller->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
+    }
+
+    // 3. Small settle delay — let I2C / QSPI transactions complete
+    delay(300);
+
+    // 4. Arm wakeup GPIO (RTC pull-up + ext0 on LOW)
+    //    Without rtc_gpio_pullup_en the pin floats during deep sleep
+    //    and the wakeup never fires.
+    _arm_wakeup_gpio();
+
+    Serial.println("[POWER] GPIO armed, entering deep sleep NOW");
+    serial_flush_safe();
+
+    // 5. Enter deep sleep — never returns; ESP resets on wakeup
     esp_deep_sleep_start();
+
+    // Should never reach here — but if it does, restart as fallback
+    Serial.println("[POWER] WARNING: esp_deep_sleep_start() returned! Restarting...");
+    delay(100);
+    esp_restart();
+}
+
+// ── Restart ────────────────────────────────────────────────────────
+void power_restart() {
+    Serial.println("[POWER] Restarting...");
+    serial_flush_safe();
+    delay(100);
+    esp_restart();
 }
 
 void power_reset_idle_timer() { idle_start = millis(); }

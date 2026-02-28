@@ -87,6 +87,10 @@ lv_obj_t *charge_label = nullptr;
 lv_obj_t *cpu_label = nullptr;
 lv_obj_t *stat_bar  = nullptr;
 
+// Power menu dialog widgets
+lv_obj_t *power_overlay = nullptr;
+lv_obj_t *power_dialog  = nullptr;
+
 // ════════════════════════════════════════════════════════════════════
 //  Settings state
 // ════════════════════════════════════════════════════════════════════
@@ -126,6 +130,7 @@ void (*s_test_speaker_cb)()       = nullptr;
 void (*s_test_oled_cb)()          = nullptr;
 void (*s_brightness_cb)(uint8_t)  = nullptr;
 void (*s_volume_cb)(uint8_t)      = nullptr;
+void (*s_power_cb)(PowerAction)   = nullptr;
 
 // ════════════════════════════════════════════════════════════════════
 //  NVS persistence
@@ -185,10 +190,14 @@ void gui_init() {
     build_test();
     build_test_sensors();
     build_test_detail();
+    build_power_menu();
 
     lv_scr_load(scr_splash);
     if (stat_bar) lv_obj_add_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_create(cb_splash_timer, 2000, NULL);
+
+    // Shorter splash when waking from deep sleep (user pressed button — respond fast)
+    uint32_t splash_ms = power_is_deep_sleep_wake() ? 500 : 2000;
+    lv_timer_create(cb_splash_timer, splash_ms, NULL);
 }
 
 void gui_set_mode(AppMode mode) {
@@ -437,6 +446,22 @@ void gui_register_test_speaker_cb(void (*cb)())        { s_test_speaker_cb = cb;
 void gui_register_test_oled_cb(void (*cb)())           { s_test_oled_cb = cb; }
 void gui_register_brightness_cb(void (*cb)(uint8_t))   { s_brightness_cb = cb; }
 void gui_register_volume_cb(void (*cb)(uint8_t))       { s_volume_cb = cb; }
+void gui_register_power_cb(void (*cb)(PowerAction))    { s_power_cb = cb; }
+
+// ════════════════════════════════════════════════════════════════════
+//  Power Menu
+// ════════════════════════════════════════════════════════════════════
+void gui_show_power_menu() {
+    if (power_overlay) lv_obj_clear_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void gui_hide_power_menu() {
+    if (power_overlay) lv_obj_add_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool gui_power_menu_visible() {
+    return power_overlay && !lv_obj_has_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}
 
 // ════════════════════════════════════════════════════════════════════
 //  Calibration UI

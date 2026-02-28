@@ -1154,3 +1154,30 @@ void cb_benchmark(lv_event_t *e) {
     _bench_running  = true;
     _bench_tmr      = lv_timer_create(bench_tick_cb, 200, NULL);
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  Power menu callbacks
+// ════════════════════════════════════════════════════════════════════
+void cb_power_sleep(lv_event_t *e) {
+    (void)e;
+    gui_hide_power_menu();
+    if (s_power_cb) s_power_cb(PWR_SLEEP);
+}
+
+void cb_power_shutdown(lv_event_t *e) {
+    (void)e;
+    gui_hide_power_menu();
+    if (s_power_cb) s_power_cb(PWR_SHUTDOWN);
+}
+
+void cb_power_restart(lv_event_t *e) {
+    (void)e;
+    gui_hide_power_menu();
+    if (s_power_cb) s_power_cb(PWR_RESTART);
+}
+
+void cb_power_cancel(lv_event_t *e) {
+    (void)e;
+    gui_hide_power_menu();
+    if (s_power_cb) s_power_cb(PWR_CANCEL);
+}
