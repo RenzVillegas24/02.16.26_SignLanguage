@@ -91,6 +91,16 @@ lv_obj_t *stat_bar  = nullptr;
 lv_obj_t *power_overlay = nullptr;
 lv_obj_t *power_dialog  = nullptr;
 
+// Sleep warning dialog widgets
+lv_obj_t *sleep_warn_overlay = nullptr;
+lv_obj_t *sleep_warn_lbl     = nullptr;
+
+// Lock screen widgets
+lv_obj_t *lock_overlay  = nullptr;
+lv_obj_t *lock_icon_lbl = nullptr;
+lv_obj_t *lock_main_lbl = nullptr;
+lv_obj_t *lock_bat_lbl  = nullptr;
+
 // ════════════════════════════════════════════════════════════════════
 //  Settings state
 // ════════════════════════════════════════════════════════════════════
@@ -105,6 +115,7 @@ bool     cfg_local_sensors = false;
 bool     cfg_local_words   = true;
 bool     cfg_local_speech  = false;
 bool     cfg_back_gesture  = true;
+bool     cfg_lock_screen_on = true;  // always-on lock screen for Train/Predict modes
 
 float    bat_voltage_v  = 4.2f;
 int      bat_pct_cache  = 100;
@@ -146,6 +157,7 @@ void load_settings() {
     cfg_accent     = prefs.getUChar("acnt", 0);
     if (cfg_accent >= NUM_ACCENTS) cfg_accent = 0;
     cfg_back_gesture = prefs.getBool("bgest", true);
+    cfg_lock_screen_on = prefs.getBool("lck", true);
     prefs.end();
 }
 
@@ -159,6 +171,7 @@ void save_settings() {
     prefs.putUChar("fps", cfg_fps);
     prefs.putUChar("acnt", cfg_accent);
     prefs.putBool("bgest", cfg_back_gesture);
+    prefs.putBool("lck",   cfg_lock_screen_on);
     prefs.end();
 }
 
@@ -191,6 +204,8 @@ void gui_init() {
     build_test_sensors();
     build_test_detail();
     build_power_menu();
+    build_sleep_warning();
+    build_lock_screen();
 
     lv_scr_load(scr_splash);
     if (stat_bar) lv_obj_add_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
@@ -388,6 +403,8 @@ void gui_set_volume(uint8_t vol)      { cfg_volume = vol; }
 void gui_set_brightness(uint8_t brt)  { cfg_brightness = brt; }
 uint8_t gui_get_volume()              { return cfg_volume; }
 uint8_t gui_get_brightness()          { return cfg_brightness; }
+uint8_t gui_get_sleep_min()           { return cfg_sleep_min; }
+bool    gui_get_lock_screen_on()      { return cfg_lock_screen_on; }
 
 bool gui_local_show_sensors()         { return cfg_local_sensors; }
 bool gui_local_show_words()           { return cfg_local_words; }
@@ -461,6 +478,75 @@ void gui_hide_power_menu() {
 
 bool gui_power_menu_visible() {
     return power_overlay && !lv_obj_has_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Sleep Warning Dialog
+// ════════════════════════════════════════════════════════════════════
+void gui_show_sleep_warning(int seconds_left) {
+    if (!sleep_warn_overlay) return;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Sleeping in %d s\nTouch to cancel", seconds_left);
+    if (sleep_warn_lbl) lv_label_set_text(sleep_warn_lbl, buf);
+    lv_obj_clear_flag(sleep_warn_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void gui_hide_sleep_warning() {
+    if (sleep_warn_overlay) lv_obj_add_flag(sleep_warn_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool gui_sleep_warning_visible() {
+    return sleep_warn_overlay && !lv_obj_has_flag(sleep_warn_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Lock Screen (always-on for Train / Predict modes)
+// ════════════════════════════════════════════════════════════════════
+void gui_show_lock_screen(AppMode mode) {
+    if (!lock_overlay) return;
+    // Set text based on mode
+    if (lock_main_lbl) {
+        if (mode == MODE_TRAIN) {
+            lv_label_set_text(lock_main_lbl, "Training");
+        } else {
+            lv_label_set_text(lock_main_lbl, "Predictions:\n---");
+        }
+    }
+    // Hide status bar so lock screen is truly full-screen
+    if (stat_bar) lv_obj_add_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lock_overlay, LV_OBJ_FLAG_HIDDEN);
+    // Move lock overlay to front of lv_layer_top
+    lv_obj_move_foreground(lock_overlay);
+}
+
+void gui_hide_lock_screen() {
+    if (lock_overlay) lv_obj_add_flag(lock_overlay, LV_OBJ_FLAG_HIDDEN);
+    // Restore status bar
+    if (stat_bar) lv_obj_clear_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool gui_lock_screen_visible() {
+    return lock_overlay && !lv_obj_has_flag(lock_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void gui_lock_update_gesture(const char *text) {
+    if (!lock_main_lbl || !gui_lock_screen_visible()) return;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Predictions:\n%s", text);
+    lv_label_set_text(lock_main_lbl, buf);
+}
+
+void gui_lock_update_battery(int pct) {
+    if (!lock_bat_lbl || !gui_lock_screen_visible()) return;
+    const char *icon;
+    if      (pct > 80) icon = LV_SYMBOL_BATTERY_FULL;
+    else if (pct > 50) icon = LV_SYMBOL_BATTERY_3;
+    else if (pct > 25) icon = LV_SYMBOL_BATTERY_2;
+    else if (pct > 10) icon = LV_SYMBOL_BATTERY_1;
+    else               icon = LV_SYMBOL_BATTERY_EMPTY;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s %d%%", icon, pct);
+    lv_label_set_text(lock_bat_lbl, buf);
 }
 
 // ════════════════════════════════════════════════════════════════════

@@ -4,6 +4,7 @@
  */
 #include "sensors.h"
 #include <Wire.h>
+#include "driver/gpio.h"
 
 // ── Lightweight MPU6050 driver (no heavy library) ──
 // Register addresses
@@ -18,6 +19,13 @@ static bool  mpu_ok = false;
 
 // ── Mux helpers ──────────────────────────────
 static void mux_init() {
+    // Release any GPIO hold that was set before the previous deep sleep.
+    // gpio_hold_en() keeps pins locked after reset until explicitly released.
+    gpio_hold_dis((gpio_num_t)MUX_S0);
+    gpio_hold_dis((gpio_num_t)MUX_S1);
+    gpio_hold_dis((gpio_num_t)MUX_S2);
+    gpio_hold_dis((gpio_num_t)MUX_S3);
+
     pinMode(MUX_S0, OUTPUT);
     pinMode(MUX_S1, OUTPUT);
     pinMode(MUX_S2, OUTPUT);
@@ -149,4 +157,39 @@ void sensors_read(SensorData &d) {
         d.gyro_x  = d.gyro_y  = d.gyro_z  = 0;
         d.pitch   = d.roll = 0;
     }
+}
+
+// ── Shutdown — called before deep sleep ──────
+void sensors_shutdown() {
+    // 1. Put MPU6050 into hardware sleep mode (~5 µA vs ~3.5 mA active)
+    //    Write SLEEP bit (bit 6) to PWR_MGMT_1 register 0x6B
+    if (mpu_ok) {
+        mpu_write(MPU6050_PWR_MGMT_1, 0x40);   // SLEEP = 1
+        Serial.println("[SENSORS] MPU6050 → sleep mode");
+        mpu_ok = false;
+    }
+
+    // 2. Drive CD74HC4067 select lines LOW (deselect all channels)
+    //    then lock them LOW with gpio_hold_en().
+    //
+    //    CRITICAL: if we set these to INPUT (floating), the CMOS input
+    //    buffers of the 74HC4067 sit at ~VCC/2 during deep sleep, causing
+    //    both P- and N-transistors to conduct simultaneously (shoot-through).
+    //    That draws 3-5 mA per pin (12-20 mA total = ~50 mW).
+    //    gpio_hold_en() keeps the OUTPUT LOW state latched through deep
+    //    sleep even after the digital GPIO domain powers down.
+    digitalWrite(MUX_S0, LOW);
+    digitalWrite(MUX_S1, LOW);
+    digitalWrite(MUX_S2, LOW);
+    digitalWrite(MUX_S3, LOW);
+    // Pins remain configured as OUTPUT from mux_init() — just lock the level
+    gpio_hold_en((gpio_num_t)MUX_S0);
+    gpio_hold_en((gpio_num_t)MUX_S1);
+    gpio_hold_en((gpio_num_t)MUX_S2);
+    gpio_hold_en((gpio_num_t)MUX_S3);
+
+    // 3. ADC signal pin → input with pull-down (well-defined LOW during sleep)
+    pinMode(MUX_SIG, INPUT_PULLDOWN);
+
+    Serial.println("[SENSORS] Mux GPIOs locked LOW for deep sleep");
 }

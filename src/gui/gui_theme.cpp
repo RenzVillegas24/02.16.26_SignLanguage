@@ -148,12 +148,18 @@ void apply_theme() {
     // Clear stale back-gesture registry before deleting screens
     clear_back_gestures();
 
-    // Nullify power menu pointers BEFORE cleaning lv_layer_top —
+    // Nullify overlay pointers BEFORE cleaning lv_layer_top —
     // lv_obj_clean() will free the objects but won't reset our pointers,
-    // leaving them dangling.  Any subsequent access (e.g. gui_power_menu_visible)
-    // would dereference freed memory → Guru Meditation Error.
-    power_overlay = nullptr;
-    power_dialog  = nullptr;
+    // leaving them dangling.  Any subsequent access would dereference
+    // freed memory → Guru Meditation Error.
+    power_overlay      = nullptr;
+    power_dialog       = nullptr;
+    sleep_warn_overlay = nullptr;
+    sleep_warn_lbl     = nullptr;
+    lock_overlay       = nullptr;
+    lock_icon_lbl      = nullptr;
+    lock_main_lbl      = nullptr;
+    lock_bat_lbl       = nullptr;
 
     // Delete all screens
     del_scr(scr_menu);
@@ -179,6 +185,8 @@ void apply_theme() {
     build_test_sensors();
     build_test_detail();
     build_power_menu();          // recreate power menu on lv_layer_top
+    build_sleep_warning();       // recreate sleep warning on lv_layer_top
+    build_lock_screen();         // recreate lock screen on lv_layer_top
 
     // Return to settings
     lv_scr_load(scr_settings);

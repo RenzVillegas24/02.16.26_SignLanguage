@@ -12,6 +12,7 @@
  */
 #include <Arduino.h>
 #include <esp_sleep.h>
+#include <lvgl.h>
 #include "config.h"
 #include "display.h"
 #include "gui/gui.h"
@@ -42,6 +43,16 @@ static uint32_t  cpu_window_us = 0;     // accumulated total time (µs)
 static uint32_t  last_loop_us  = 0;     // micros() at start of previous loop
 static uint32_t  last_cpu_upd  = 0;     // millis() of last CPU% push
 static int       cpu_pct       = 0;     // smoothed CPU %
+
+// Auto-sleep / lock-screen state
+static bool      sleep_warn_active = false;  // is warning dialog currently showing?
+static bool      lock_active       = false;  // is lock screen currently active?
+static uint32_t  last_lock_bat     = 0;      // millis() of last battery update on lock screen
+
+// Double-tap detection for lock screen dismiss
+static uint32_t  lock_prev_idle_ms = UINT32_MAX; // idle_ms from previous loop iteration
+static uint32_t  lock_last_tap_ms  = 0;           // millis() of most recent tap while locked
+static int       lock_tap_count    = 0;            // consecutive taps within window
 
 // ════════════════════════════════════════════════════════════════════
 //  GUI → main mode-change callback
@@ -92,9 +103,13 @@ static void execute_pending_power_action() {
     switch (act) {
     case PWR_SLEEP:
         Serial.println("[MAIN] Power menu → Sleep (light sleep)");
+        // Clear any active auto-sleep UI before entering sleep
+        if (sleep_warn_active) { gui_hide_sleep_warning(); sleep_warn_active = false; }
+        if (lock_active)       { gui_hide_lock_screen();   lock_active = false; }
         audio_stop();
         power_light_sleep();
         // Execution resumes here after wakeup from light sleep
+        lv_disp_trig_activity(NULL);   // reset LVGL inactivity so auto-sleep doesn't re-trigger
         Serial.println("[MAIN] Resumed from light sleep");
         break;
 
@@ -259,17 +274,135 @@ void loop() {
 
     // Long press → show power menu dialog (Sleep / Shutdown / Restart / Cancel)
     if (power_button_long_press() && !gui_power_menu_visible()) {
+        // Dismiss any auto-sleep UI first
+        if (sleep_warn_active) { gui_hide_sleep_warning(); sleep_warn_active = false; }
+        if (lock_active)       { gui_hide_lock_screen();   lock_active = false; }
         gui_show_power_menu();
+        lv_disp_trig_activity(NULL);
     }
 
     // Short press while power menu is open → dismiss it
     if (power_button_pressed() && gui_power_menu_visible()) {
         gui_hide_power_menu();
+        lv_disp_trig_activity(NULL);
+    }
+    // Short press while lock screen is active → dismiss lock
+    else if (power_button_pressed() && lock_active) {
+        gui_hide_lock_screen();
+        lock_active = false;
+        lv_disp_trig_activity(NULL);
+    }
+    // Short press otherwise → immediate light sleep
+    else if (power_button_pressed() && !gui_power_menu_visible()) {
+        pending_power_action = PWR_SLEEP;
     }
 
-    // Short press while power menu is NOT open → immediate light sleep
-    if (power_button_pressed() && !gui_power_menu_visible()) {
-        pending_power_action = PWR_SLEEP;
+    // ── Auto-sleep / lock-screen logic ─────────────────────────────
+    // Uses LVGL's built-in inactivity tracker (reset by touch events).
+    // cfg_sleep_min is 1–30 minutes.
+    {
+        const uint32_t idle_ms  = lv_disp_get_inactive_time(NULL);
+        const uint32_t sleep_ms = (uint32_t)gui_get_sleep_min() * 60UL * 1000UL;
+        // Warning duration: 20 % of total, capped at 120 s, minimum 1 s
+        int warn_sec = ((int)gui_get_sleep_min() * 60 * 20) / 100;
+        if (warn_sec > 120) warn_sec = 120;
+        if (warn_sec < 1)   warn_sec = 1;
+        const uint32_t warn_ms = sleep_ms - (uint32_t)warn_sec * 1000UL;
+
+        // Don't auto-sleep while power menu is open or action pending
+        bool skip = gui_power_menu_visible() || pending_power_action != PWR_NONE;
+
+        if (lock_active && !skip) {
+            // ── Lock screen is showing ─────────────────────────
+            // Each touch resets LVGL inactivity → idle_ms drops back to ~0.
+            // Detect a new tap: previous loop's idle was large, this loop it's near zero.
+            bool new_tap = (idle_ms < 80) && (lock_prev_idle_ms > 150);
+            lock_prev_idle_ms = idle_ms;
+
+            if (new_tap) {
+                uint32_t gap = now - lock_last_tap_ms;
+                if (gap < 500) {
+                    lock_tap_count++;
+                } else {
+                    lock_tap_count = 1;   // too slow → restart count
+                }
+                lock_last_tap_ms = now;
+                Serial.printf("[MAIN] Lock tap #%d (gap %lu ms)\n", lock_tap_count, (unsigned long)gap);
+            }
+
+            if (lock_tap_count >= 2) {
+                // Double-tap confirmed → dismiss lock screen
+                gui_hide_lock_screen();
+                lock_active       = false;
+                lock_tap_count    = 0;
+                lock_prev_idle_ms = UINT32_MAX;
+                Serial.println("[MAIN] Lock screen dismissed (double-tap)");
+            } else {
+                // Update lock screen content while waiting
+                if (current_mode == MODE_PREDICT_LOCAL || current_mode == MODE_PREDICT_WEB) {
+                    gui_lock_update_gesture(gesture_text);
+                }
+                if (now - last_lock_bat >= 60000) {
+                    last_lock_bat = now;
+                    gui_lock_update_battery(power_battery_percent());
+                }
+            }
+        } else if (sleep_warn_active && !skip) {
+            // ── Warning dialog is showing ──────────────────────
+            if (idle_ms < warn_ms) {
+                // User touched → cancel warning
+                gui_hide_sleep_warning();
+                sleep_warn_active = false;
+                Serial.println("[MAIN] Auto-sleep cancelled (touch)");
+            } else {
+                int remaining = (int)((sleep_ms - idle_ms) / 1000);
+                if (remaining <= 0) {
+                    // Time's up — execute sleep action
+                    gui_hide_sleep_warning();
+                    sleep_warn_active = false;
+                    bool is_active_mode = (current_mode == MODE_TRAIN
+                                        || current_mode == MODE_PREDICT_LOCAL
+                                        || current_mode == MODE_PREDICT_WEB);
+                    if (is_active_mode && gui_get_lock_screen_on()) {
+                        lock_active       = true;
+                        lock_tap_count    = 0;
+                        lock_prev_idle_ms = UINT32_MAX;
+                        last_lock_bat = now;
+                        gui_lock_update_battery(power_battery_percent());
+                        gui_show_lock_screen(current_mode);
+                        Serial.println("[MAIN] Auto-sleep → lock screen");
+                    } else {
+                        pending_power_action = PWR_SLEEP;
+                        Serial.println("[MAIN] Auto-sleep → light sleep");
+                    }
+                } else {
+                    gui_show_sleep_warning(remaining);
+                }
+            }
+        } else if (!skip && !lock_active && !sleep_warn_active) {
+            // ── Check if we should start the warning ───────────
+            if (idle_ms >= warn_ms && idle_ms < sleep_ms) {
+                sleep_warn_active = true;
+                int remaining = (int)((sleep_ms - idle_ms) / 1000);
+                gui_show_sleep_warning(remaining);
+                Serial.printf("[MAIN] Auto-sleep warning (%d s)\n", remaining);
+            } else if (idle_ms >= sleep_ms) {
+                // Missed warning window (shouldn't happen normally)
+                bool is_active_mode = (current_mode == MODE_TRAIN
+                                    || current_mode == MODE_PREDICT_LOCAL
+                                    || current_mode == MODE_PREDICT_WEB);
+                if (is_active_mode && gui_get_lock_screen_on()) {
+                    lock_active       = true;
+                    lock_tap_count    = 0;
+                    lock_prev_idle_ms = UINT32_MAX;
+                    last_lock_bat = now;
+                    gui_lock_update_battery(power_battery_percent());
+                    gui_show_lock_screen(current_mode);
+                } else {
+                    pending_power_action = PWR_SLEEP;
+                }
+            }
+        }
     }
 
     // ── Read sensors ───────────────────────────────────────────────
@@ -277,7 +410,6 @@ void loop() {
         last_sensor = now;
         sensors_read(sensor_data);
         sensor_module_process(sensor_data, processed_data);
-        power_reset_idle_timer();
     }
 
     // ── Mode-specific logic ────────────────────────────────────────
@@ -293,14 +425,14 @@ void loop() {
 
     case MODE_PREDICT_LOCAL:
         classify_gesture();
-        if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
+        if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             if (gui_local_show_sensors())
                 gui_update(sensor_data);
             if (gui_local_show_words())
                 gui_set_gesture(gesture_text);
         }
-        if (gui_local_use_speech() && !audio_is_playing()) {
+        if (gui_local_use_speech() && !audio_is_playing() && !lock_active) {
             if (strcmp(gesture_text, "FIST") == 0)
                 audio_play_tone(440, 300);
             else if (strcmp(gesture_text, "OPEN HAND") == 0)
@@ -310,9 +442,11 @@ void loop() {
 
     case MODE_PREDICT_WEB:
         classify_gesture();
-        web_server_update(sensor_data, gesture_text);
-        gui_web_set_connected(web_server_num_clients() > 0);
-        if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
+        if (!lock_active) {
+            web_server_update(sensor_data, gesture_text);
+            gui_web_set_connected(web_server_num_clients() > 0);
+        }
+        if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             gui_set_gesture(gesture_text);
         }

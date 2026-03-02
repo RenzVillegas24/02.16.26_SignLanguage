@@ -19,12 +19,15 @@
 #include "power.h"
 #include "config.h"
 #include "display.h"
+#include "sensors.h"
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
+#include "driver/gpio.h"
 #include "Arduino_DriveBus_Library.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include <Wire.h>
 
 // ── SY6970 charger IC ──────────────────────────────────────────────
 static std::shared_ptr<Arduino_IIC_DriveBus> pwr_iic_bus =
@@ -53,9 +56,8 @@ static bool     btn_short       = false;
 static bool     btn_long        = false;
 static bool     btn_long_fired  = false;
 
-// ── Idle / auto-sleep ──────────────────────────────────────────────
+// ── Idle tracking (auto-sleep logic lives in main.cpp) ─────────────
 static uint32_t idle_start = 0;
-#define IDLE_SLEEP_MS (5UL * 60 * 1000)   // 5 minutes
 
 // Flush serial with a hard timeout — ESP32-S3 USB CDC can block
 // indefinitely on Serial.flush() when no USB host is connected.
@@ -185,10 +187,8 @@ void power_update() {
     }
     btn_last = now;
 
-    // Idle auto-sleep (light sleep after inactivity)
+    // Reset idle on physical button press (auto-sleep managed by main.cpp)
     if (btn_short || btn_long) power_reset_idle_timer();
-    if (millis() - idle_start > IDLE_SLEEP_MS)
-        power_light_sleep();
 }
 
 bool power_button_pressed()    { return btn_short; }
@@ -364,32 +364,73 @@ void power_light_sleep() {
 // ── Deep Sleep (Shutdown) ──────────────────────────────────────────
 // Puts the ESP32 into deep sleep. This is effectively a shutdown.
 // Pressing the power button triggers a full reset/restart.
+//
+// We aggressively shut down every peripheral and isolate every GPIO so
+// that only the RTC domain + GPIO 2 (wakeup button) remain powered.
 void power_deep_sleep() {
     Serial.println("[POWER] Entering deep sleep (shutdown)...");
     serial_flush_safe();
 
-    // 1. Power down display
+    // ── 1. Power down display ─────────────────────────────────────
     display_off();
 
-    // 2. Put touch controller into low-power monitor mode
+    // ── 2. Put touch controller into lowest-power mode ────────────
     if (touch_controller) {
         touch_controller->IIC_Write_Device_State(
             touch_controller->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
             touch_controller->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
     }
 
-    // 3. Small settle delay — let I2C / QSPI transactions complete
-    delay(300);
+    // ── 3. Shut down sensors (MPU6050 → sleep, mux GPIOs → high-Z)
+    sensors_shutdown();
 
-    // 4. Arm wakeup GPIO (RTC pull-up + ext0 on LOW)
-    //    Without rtc_gpio_pullup_en the pin floats during deep sleep
-    //    and the wakeup never fires.
+    // ── 4. End I2C bus — releases SDA/SCL GPIOs (6, 7) ───────────
+    //    Both MPU6050 and FT3168 are now in low-power modes,
+    //    so no further I2C traffic is needed.
+    Wire.end();
+    pinMode(IIC_SDA, INPUT);
+    pinMode(IIC_SCL, INPUT);
+
+    // ── 5. Isolate touch controller GPIOs ─────────────────────────
+    pinMode(TP_INT, INPUT);
+    pinMode(TP_RST, INPUT);
+
+    // ── 6. Isolate I2S / audio GPIOs ──────────────────────────────
+    //    audio_stop() was already called from main.cpp, but the I2S
+    //    driver may leave the pins configured as output.  Float them
+    //    so the MAX98357A amp doesn't see phantom clocks.
+    pinMode(I2S_BCLK, INPUT);
+    pinMode(I2S_LRCK, INPUT);
+    pinMode(I2S_DOUT, INPUT);
+
+    // ── 7. Isolate QSPI display bus GPIOs ─────────────────────────
+    //    display_off() cut LCD_EN (power) but the QSPI pins may
+    //    still be configured as SPI outputs. Float them.
+    pinMode(LCD_CS,    INPUT);
+    pinMode(LCD_SCLK,  INPUT);
+    pinMode(LCD_SDIO0, INPUT);
+    pinMode(LCD_SDIO1, INPUT);
+    pinMode(LCD_SDIO2, INPUT);
+    pinMode(LCD_SDIO3, INPUT);
+    pinMode(LCD_RST,   INPUT);
+    pinMode(LCD_EN,    INPUT);     // already LOW from display_off()
+
+    // ── 8. Small settle — let everything quiesce ──────────────────
+    delay(100);
+
+    // ── 9. Arm wakeup GPIO (RTC pull-up + ext0 on LOW) ───────────
+    //    Only GPIO 2 stays active in the RTC domain.
     _arm_wakeup_gpio();
 
-    Serial.println("[POWER] GPIO armed, entering deep sleep NOW");
+    // ── 10. Activate GPIO hold — locks every gpio_hold_en() pin LOW
+    //     through deep sleep even after the digital domain powers down.
+    //     Without this, held pins would revert to floating on power-down.
+    gpio_deep_sleep_hold_en();
+
+    Serial.println("[POWER] All peripherals shut down, entering deep sleep NOW");
     serial_flush_safe();
 
-    // 5. Enter deep sleep — never returns; ESP resets on wakeup
+    // ── 11. Enter deep sleep — never returns; ESP resets on wakeup ─
     esp_deep_sleep_start();
 
     // Should never reach here — but if it does, restart as fallback
@@ -407,3 +448,5 @@ void power_restart() {
 }
 
 void power_reset_idle_timer() { idle_start = millis(); }
+
+uint32_t power_idle_elapsed_ms() { return millis() - idle_start; }

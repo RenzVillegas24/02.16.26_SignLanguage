@@ -96,6 +96,12 @@ void cb_back_gesture_switch(lv_event_t *e) {
     save_settings();
 }
 
+void cb_lock_screen_switch(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    cfg_lock_screen_on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    save_settings();
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  Slider callbacks
 // ════════════════════════════════════════════════════════════════════

@@ -12,6 +12,7 @@ bool  power_button_long_press();   // true on ≥2 s hold
 float power_battery_voltage();
 int   power_battery_percent();
 void  power_reset_idle_timer();
+uint32_t power_idle_elapsed_ms();    // ms since last user interaction
 
 // ── Sleep / power control ──────────────────────────────────────────
 void  power_light_sleep();           // light sleep — resumes on button press

@@ -212,6 +212,8 @@ void build_settings() {
     slider_sleep = add_slider_row(cont, LV_SYMBOL_POWER, "Auto-sleep (min)",
                                   1, 30, cfg_sleep_min,
                                   cb_slider_sleep, &lbl_slp_val);
+    add_switch_row(cont, LV_SYMBOL_EYE_CLOSE, "Always-on Screen",
+                   cfg_lock_screen_on, cb_lock_screen_switch);
 
     // -- Diagnostics — nav button to Tests --
     mk_section(cont, "DIAGNOSTICS");
@@ -750,4 +752,97 @@ void build_power_menu() {
 
     // ── Hidden by default ──
     lv_obj_add_flag(power_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Sleep Warning Dialog (overlay on lv_layer_top)
+// ════════════════════════════════════════════════════════════════════
+void build_sleep_warning() {
+    lv_obj_t *top = lv_layer_top();
+
+    // ── Full-screen semi-transparent backdrop ──
+    sleep_warn_overlay = lv_obj_create(top);
+    lv_obj_set_size(sleep_warn_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(sleep_warn_overlay, 0, 0);
+    lv_obj_set_style_bg_color(sleep_warn_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(sleep_warn_overlay, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(sleep_warn_overlay, 0, 0);
+    lv_obj_set_style_radius(sleep_warn_overlay, 0, 0);
+    lv_obj_clear_flag(sleep_warn_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Centred dialog card ──
+    lv_obj_t *card = lv_obj_create(sleep_warn_overlay);
+    lv_obj_set_size(card, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_pad_all(card, 20, 0);
+    lv_obj_set_style_pad_row(card, 8, 0);
+    lv_obj_set_layout(card, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Lock icon ──
+    lv_obj_t *sw_icon = lv_label_create(card);
+    lv_label_set_text(sw_icon, LV_SYMBOL_LOCK);
+    lv_obj_set_style_text_font(sw_icon, &custom_symbol, 0);
+    lv_obj_set_style_text_color(sw_icon, tc->card_text, 0);
+
+    // ── Countdown label ──
+    sleep_warn_lbl = lv_label_create(card);
+    lv_label_set_text(sleep_warn_lbl, "Sleeping in -- s\nTouch to cancel");
+    lv_obj_set_style_text_font(sleep_warn_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(sleep_warn_lbl, tc->card_text, 0);
+    lv_obj_set_style_text_align(sleep_warn_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(sleep_warn_lbl, BTN_W - 40);
+
+    // ── Hidden by default ──
+    lv_obj_add_flag(sleep_warn_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Lock Screen (always-on for Train / Predict modes, on lv_layer_top)
+// ════════════════════════════════════════════════════════════════════
+void build_lock_screen() {
+    lv_obj_t *top = lv_layer_top();
+
+    // ── Full-screen opaque black backdrop ──
+    lock_overlay = lv_obj_create(top);
+    lv_obj_set_size(lock_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(lock_overlay, 0, 0);
+    lv_obj_set_style_bg_color(lock_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lock_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(lock_overlay, 0, 0);
+    lv_obj_set_style_radius(lock_overlay, 0, 0);
+    lv_obj_clear_flag(lock_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Lock icon — FontAwesome 5 padlock glyph (U+F023, 16 px) ──
+    lock_icon_lbl = lv_label_create(lock_overlay);
+    lv_label_set_text(lock_icon_lbl, LV_SYMBOL_LOCK);
+    lv_obj_set_style_text_font(lock_icon_lbl, &custom_symbol, 0);
+    lv_obj_set_style_text_color(lock_icon_lbl, lv_color_make(0x99, 0x99, 0x99), 0);
+    lv_obj_align(lock_icon_lbl, LV_ALIGN_TOP_MID, 0, 56);
+
+    // ── Main text label (centre) — "Training" or "Predictions:\n<gesture>" ──
+    lock_main_lbl = lv_label_create(lock_overlay);
+    lv_label_set_text(lock_main_lbl, "");
+    lv_obj_set_style_text_font(lock_main_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lock_main_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_align(lock_main_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(lock_main_lbl, SCR_W - 40);
+    lv_obj_align(lock_main_lbl, LV_ALIGN_CENTER, 0, 0);
+
+    // ── Battery label (bottom-centre) ──
+    lock_bat_lbl = lv_label_create(lock_overlay);
+    lv_label_set_text(lock_bat_lbl, LV_SYMBOL_BATTERY_FULL " 100%");
+    lv_obj_set_style_text_font(lock_bat_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lock_bat_lbl, lv_color_make(0x99, 0x99, 0x99), 0);
+    lv_obj_align(lock_bat_lbl, LV_ALIGN_BOTTOM_MID, 0, -30);
+
+    // ── Hidden by default ──
+    lv_obj_add_flag(lock_overlay, LV_OBJ_FLAG_HIDDEN);
 }

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "sensor_module/sensor_module.h"
 #include <cstring>
+#include "symbols/custom.h"     // FontAwesome custom glyphs (LV_SYMBOL_LOCK, custom_symbol)
 
 // ════════════════════════════════════════════════════════════════════
 //  Layout constants
@@ -166,6 +167,16 @@ extern lv_obj_t *stat_bar;
 extern lv_obj_t *power_overlay;       // Full-screen semi-transparent backdrop
 extern lv_obj_t *power_dialog;        // Centred dialog card
 
+// Sleep warning dialog widgets (on lv_layer_top)
+extern lv_obj_t *sleep_warn_overlay;
+extern lv_obj_t *sleep_warn_lbl;
+
+// Lock screen widgets (on lv_layer_top)
+extern lv_obj_t *lock_overlay;
+extern lv_obj_t *lock_icon_lbl;
+extern lv_obj_t *lock_main_lbl;
+extern lv_obj_t *lock_bat_lbl;
+
 // ════════════════════════════════════════════════════════════════════
 //  Styles
 // ════════════════════════════════════════════════════════════════════
@@ -187,6 +198,7 @@ extern bool     cfg_local_sensors;
 extern bool     cfg_local_words;
 extern bool     cfg_local_speech;
 extern bool     cfg_back_gesture;
+extern bool     cfg_lock_screen_on;  // always-on lock screen for Train/Predict
 
 extern float    bat_voltage_v;
 extern int      bat_pct_cache;
@@ -265,6 +277,8 @@ void build_test_sensors();
 void build_test_detail();
 void build_status_bar();
 void build_power_menu();
+void build_sleep_warning();
+void build_lock_screen();
 void populate_test_detail();
 void show_calibration_dialog();
 void hide_calibration_dialog();
@@ -304,6 +318,7 @@ void cb_local_sensors(lv_event_t *e);
 void cb_local_words(lv_event_t *e);
 void cb_local_speech(lv_event_t *e);
 void cb_back_gesture_switch(lv_event_t *e);
+void cb_lock_screen_switch(lv_event_t *e);
 
 void cb_test_oled(lv_event_t *e);
 void cb_test_mpu(lv_event_t *e);

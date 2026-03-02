@@ -27,6 +27,8 @@ void gui_set_volume(uint8_t vol);         // 0-100
 void gui_set_brightness(uint8_t brt);     // 0-255
 uint8_t gui_get_volume();
 uint8_t gui_get_brightness();
+uint8_t gui_get_sleep_min();              // auto-sleep minutes (1-30)
+bool    gui_get_lock_screen_on();         // true → lock screen instead of sleep in active modes
 
 // Local-mode flag getters
 bool gui_local_show_sensors();
@@ -58,3 +60,15 @@ void gui_register_test_speaker_cb(void (*cb)());
 void gui_register_test_oled_cb(void (*cb)());
 void gui_register_brightness_cb(void (*cb)(uint8_t));
 void gui_register_volume_cb(void (*cb)(uint8_t));
+
+// ── Auto-sleep warning dialog ──────────────────────────────────────
+void gui_show_sleep_warning(int seconds_left);   // show/update countdown
+void gui_hide_sleep_warning();                    // dismiss warning
+bool gui_sleep_warning_visible();
+
+// ── Lock screen (always-on for Train / Predict modes) ──────────────
+void gui_show_lock_screen(AppMode mode);          // enter lock screen
+void gui_hide_lock_screen();                      // exit lock screen
+bool gui_lock_screen_visible();
+void gui_lock_update_gesture(const char *text);   // update prediction text
+void gui_lock_update_battery(int pct);            // update battery %
