@@ -74,6 +74,9 @@ static void lvgl_rounder_cb(lv_disp_drv_t * /*drv*/, lv_area_t *area) {
     if (h % 2 != 0) area->y2 -= 1;
 }
 
+// ── Brightness tracking ──────────────────────
+static uint8_t current_brightness = 200;   // remembers last-set value
+
 // ── Public API ───────────────────────────────
 void display_init() {
     // Enable display power
@@ -153,6 +156,7 @@ void display_init() {
 }
 
 void display_set_brightness(uint8_t level) {
+    current_brightness = level;
     gfx->Display_Brightness(level);
 }
 
@@ -181,5 +185,5 @@ void display_on() {
     // Send MIPI DCS SLEEP OUT (0x11) to wake the CO5300 from sleep mode.
     // All configuration (pixel format, addressing, etc.) is preserved.
     gfx->displayOn();
-    gfx->Display_Brightness(200);
+    gfx->Display_Brightness(current_brightness);
 }

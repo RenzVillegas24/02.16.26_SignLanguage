@@ -205,6 +205,7 @@ void setup() {
 
     // 2. GUI (creates all LVGL screens, shows splash)
     gui_init();
+    display_set_brightness(gui_get_brightness());  // apply saved brightness (syncs current_brightness)
     gui_register_mode_callback(on_mode_change);
     gui_register_brightness_cb(on_brightness_change);
     gui_register_volume_cb(on_volume_change);
