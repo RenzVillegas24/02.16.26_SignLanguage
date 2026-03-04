@@ -11,6 +11,7 @@
 //  Tunables
 // ─────────────────────────────────────────────
 #define CALIBRATION_TIME_MS    5000
+#define PHASE_SAMPLE_TIME_MS   3000   // Per-phase sampling time for new multi-phase calibration
 #define BASELINE_ADAPT_ALPHA   0.002f  // Slow drift compensation inside deadzone
 
 // Max calibration samples stored for stddev computation
@@ -429,6 +430,285 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
                       hall_top_cal[i].front_range, hall_top_cal[i].back_range);
     }
     Serial.println("─────────────────────────────────────────\n");
+}
+
+// ─────────────────────────────────────────────
+//  Multi-phase calibration (NEW)
+// ─────────────────────────────────────────────
+//
+//  Phase 0 — FLAT HAND (fingers extended):
+//    • Flex: set flat_value + noise deadzone
+//    • Hall (side/knuckle): magnets CLOSEST → record close_avg
+//    • Hall (top/fingertip): magnets FARTHEST → record far_avg
+//
+//  Phase 1 — CLOSED FIST, THUMBS ON TOP (punching):
+//    • Flex: max-bent → compute upward/downward range
+//    • Hall (side): magnets FARTHEST → record far_avg
+//    • Hall (top) Index..Pinky: magnets CLOSEST → record close_avg
+//
+//  Phase 2 — CLOSED FIST, THUMBS TUCKED INSIDE:
+//    • Hall (top) Thumb only: magnets CLOSEST → record close_avg
+//
+//  Finalize: compute ranges from sampled extremes.
+
+// Per-phase raw averages (populated by calibrate_phase, consumed by finalize)
+static uint16_t phase_flex_flat[NUM_FLEX_SENSORS];       // Phase 0
+static uint16_t phase_flex_fist[NUM_FLEX_SENSORS];       // Phase 1
+static uint16_t phase_flex_dz[NUM_FLEX_SENSORS];         // Phase 0 noise deadzone
+
+static uint16_t phase_hall_close[NUM_HALL_SENSORS];      // Phase 0 (flat = close)
+static uint16_t phase_hall_far[NUM_HALL_SENSORS];         // Phase 1 (fist = far)
+
+static uint16_t phase_hall_top_far[NUM_HALL_TOP_SENSORS]; // Phase 0 (flat = far)
+static uint16_t phase_hall_top_close[NUM_HALL_TOP_SENSORS]; // Phase 1 for Idx..Pky, Phase 2 for Thumb
+
+static bool phase_done[CALIB_PHASE_COUNT] = {false, false, false};
+
+const char *sensor_calib_phase_title(CalibPhase phase) {
+    switch (phase) {
+        case CALIB_PHASE_FLAT_HAND:     return "Step 1/3: Flat Hand";
+        case CALIB_PHASE_FIST_THUMB_UP: return "Step 2/3: Fist (Thumbs Up)";
+        case CALIB_PHASE_FIST_THUMB_IN: return "Step 3/3: Fist (Thumb Inside)";
+        default: return "Calibration";
+    }
+}
+
+const char *sensor_calib_phase_instruction(CalibPhase phase) {
+    switch (phase) {
+        case CALIB_PHASE_FLAT_HAND:
+            return "Lay your hand completely flat\n"
+                   "with fingers extended.";
+        case CALIB_PHASE_FIST_THUMB_UP:
+            return "Close your fist with thumb\n"
+                   "on TOP of the fingers\n"
+                   "(like a punching pose).";
+        case CALIB_PHASE_FIST_THUMB_IN:
+            return "Close your fist with thumb\n"
+                   "tucked INSIDE (below)\n"
+                   "the fingers.";
+        default: return "";
+    }
+}
+
+void sensor_module_calibrate_phase(CalibPhase phase,
+                                   SensorCalibProgressCb progress_cb) {
+    Serial.printf("\n[CAL] Phase %d: %s\n", (int)phase,
+                  sensor_calib_phase_title(phase));
+
+    uint32_t flex_acc[NUM_FLEX_SENSORS]         = {0};
+    uint32_t hall_acc[NUM_HALL_SENSORS]          = {0};
+    uint32_t hall_top_acc[NUM_HALL_TOP_SENSORS]  = {0};
+
+    // For phase 0 flex deadzone: store samples for stddev
+    uint16_t flex_samples[NUM_FLEX_SENSORS][MAX_CAL_SAMPLES];
+    if (phase == CALIB_PHASE_FLAT_HAND)
+        memset(flex_samples, 0, sizeof(flex_samples));
+
+    uint32_t t0 = millis();
+    uint16_t n  = 0;
+
+    while (millis() - t0 < PHASE_SAMPLE_TIME_MS) {
+        for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+            uint16_t v = mux_read_oversampled(flex_channels[i]);
+            flex_acc[i] += v;
+            if (phase == CALIB_PHASE_FLAT_HAND && n < MAX_CAL_SAMPLES)
+                flex_samples[i][n] = v;
+        }
+        for (int i = 0; i < NUM_HALL_SENSORS; i++)
+            hall_acc[i] += mux_read_oversampled(hall_channels[i]);
+        for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
+            hall_top_acc[i] += mux_read_oversampled(hall_top_channels[i]);
+
+        n++;
+
+        int pct = (int)(((float)(millis() - t0) / PHASE_SAMPLE_TIME_MS) * 100);
+        if (pct > 100) pct = 100;
+        if (progress_cb) progress_cb(pct);
+        if (n % 15 == 0) Serial.print(".");
+        delay(50);
+    }
+    if (n == 0) n = 1;  // safety
+    uint16_t n_flex = (n < MAX_CAL_SAMPLES) ? n : MAX_CAL_SAMPLES;
+
+    // Store phase-specific averages
+    switch (phase) {
+        case CALIB_PHASE_FLAT_HAND: {
+            // Flex: flat value + noise deadzone
+            for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+                uint32_t sum = 0;
+                for (uint16_t s = 0; s < n_flex; s++) sum += flex_samples[i][s];
+                phase_flex_flat[i] = (uint16_t)(sum / n_flex);
+
+                // Stddev-based deadzone
+                uint32_t var_sum = 0;
+                for (uint16_t s = 0; s < n_flex; s++) {
+                    int32_t d = (int32_t)flex_samples[i][s] - (int32_t)phase_flex_flat[i];
+                    var_sum += (uint32_t)(d * d);
+                }
+                float stddev = sqrtf((float)var_sum / n_flex);
+                phase_flex_dz[i] = (uint16_t)constrain(
+                    (int)(stddev * DZ_SIGMA_MULT + 0.5f), DZ_MIN, DZ_MAX);
+            }
+            // Hall (side): magnets closest → close value
+            for (int i = 0; i < NUM_HALL_SENSORS; i++)
+                phase_hall_close[i] = (uint16_t)(hall_acc[i] / n);
+            // Hall (top): magnets farthest → far value
+            for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
+                phase_hall_top_far[i] = (uint16_t)(hall_top_acc[i] / n);
+            break;
+        }
+        case CALIB_PHASE_FIST_THUMB_UP: {
+            // Flex: fist bent values
+            for (int i = 0; i < NUM_FLEX_SENSORS; i++)
+                phase_flex_fist[i] = (uint16_t)(flex_acc[i] / n);
+            // Hall (side): magnets farthest → far value
+            for (int i = 0; i < NUM_HALL_SENSORS; i++)
+                phase_hall_far[i] = (uint16_t)(hall_acc[i] / n);
+            // Hall (top) Index..Pinky: magnets closest → close value
+            // (Thumb NOT set here — that's phase 2)
+            for (int i = 1; i < NUM_HALL_TOP_SENSORS; i++)  // skip i=0 (thumb)
+                phase_hall_top_close[i] = (uint16_t)(hall_top_acc[i] / n);
+            break;
+        }
+        case CALIB_PHASE_FIST_THUMB_IN: {
+            // Hall (top) Thumb only: magnets closest → close value
+            phase_hall_top_close[0] = (uint16_t)(hall_top_acc[0] / n);
+            break;
+        }
+        default: break;
+    }
+
+    phase_done[(int)phase] = true;
+
+    Serial.printf("\n[CAL] Phase %d done (%d samples)\n", (int)phase, n);
+}
+
+bool sensor_module_calibrate_finalize() {
+    // Verify all phases were sampled
+    for (int i = 0; i < CALIB_PHASE_COUNT; i++) {
+        if (!phase_done[i]) {
+            Serial.printf("[CAL] ERROR: Phase %d not completed!\n", i);
+            return false;
+        }
+    }
+
+    Serial.println("\n[CAL] Finalizing multi-phase calibration...");
+
+    // ── Flex ──
+    // flat_value from phase 0, range from difference to phase 1 (fist)
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        flex_cal[i].flat_value     = phase_flex_flat[i];
+        flex_cal[i].noise_deadzone = phase_flex_dz[i];
+
+        int16_t diff = (int16_t)phase_flex_fist[i] - (int16_t)phase_flex_flat[i];
+        // diff > 0 means bending increases ADC → upward range
+        // diff < 0 means bending decreases ADC → downward range
+        if (diff > 0) {
+            flex_cal[i].upward_range   = (uint16_t)diff;
+            flex_cal[i].downward_range = (uint16_t)(diff * 3 / 4); // estimate opposite
+        } else if (diff < 0) {
+            flex_cal[i].downward_range = (uint16_t)(-diff);
+            flex_cal[i].upward_range   = (uint16_t)((-diff) * 3 / 4);
+        } else {
+            // No change detected — keep defaults
+            flex_cal[i].upward_range   = 150;
+            flex_cal[i].downward_range = 110;
+        }
+        flex_cal[i].calibrated = true;
+        flex_ema[i] = (float)flex_cal[i].flat_value;
+    }
+    flex_ema_init = true;
+
+    // ── Hall (side/knuckle) ──
+    // close_val from phase 0 (flat), far_val from phase 1 (fist)
+    // normal = midpoint, front_range = |close - normal|, back_range = |normal - far|
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        uint16_t close_v = phase_hall_close[i];
+        uint16_t far_v   = phase_hall_far[i];
+        uint16_t mid     = (close_v + far_v) / 2;
+
+        hall_cal[i].normal = mid;
+
+        if (close_v >= far_v) {
+            hall_cal[i].front_range = close_v - mid;
+            hall_cal[i].back_range  = mid - far_v;
+        } else {
+            hall_cal[i].front_range = mid - close_v;
+            hall_cal[i].back_range  = far_v - mid;
+        }
+        // Ensure non-zero ranges
+        if (hall_cal[i].front_range == 0) hall_cal[i].front_range = 1;
+        if (hall_cal[i].back_range  == 0) hall_cal[i].back_range  = 1;
+
+        hall_cal[i].calibrated = true;
+        hall_ema[i] = (float)hall_cal[i].normal;
+    }
+    hall_ema_init = true;
+
+    // ── Hall (top/fingertip) ──
+    // far_val from phase 0 (flat), close_val from phase 1/2
+    // normal = midpoint, front_range = towards magnet, back_range = away
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        uint16_t close_v = phase_hall_top_close[i];
+        uint16_t far_v   = phase_hall_top_far[i];
+        uint16_t mid     = (close_v + far_v) / 2;
+
+        hall_top_cal[i].normal = mid;
+
+        if (close_v >= far_v) {
+            hall_top_cal[i].front_range = close_v - mid;
+            hall_top_cal[i].back_range  = mid - far_v;
+        } else {
+            hall_top_cal[i].front_range = mid - close_v;
+            hall_top_cal[i].back_range  = far_v - mid;
+        }
+        if (hall_top_cal[i].front_range == 0) hall_top_cal[i].front_range = 1;
+        if (hall_top_cal[i].back_range  == 0) hall_top_cal[i].back_range  = 1;
+
+        hall_top_cal[i].calibrated = true;
+        hall_top_ema[i] = (float)hall_top_cal[i].normal;
+    }
+    hall_top_ema_init = true;
+
+    s_calibrated = true;
+    reset_smoothing_state();
+
+    // Persist to NVS
+    sensor_module_save_calibration();
+
+    // Print summary
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║   MULTI-PHASE CALIBRATION COMPLETE     ║");
+    Serial.println("╚════════════════════════════════════════╝");
+
+    Serial.println("─── Flex ────────────────────────────────");
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        Serial.printf("  %-6s  Flat=%4d  Fist=%4d  (Up:+%d Down:-%d DZ:±%d)\n",
+                      finger_names[i], flex_cal[i].flat_value,
+                      phase_flex_fist[i],
+                      flex_cal[i].upward_range, flex_cal[i].downward_range,
+                      flex_cal[i].noise_deadzone);
+    }
+    Serial.println("─── Hall (side) ─────────────────────────");
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        Serial.printf("  %-6s  Close=%4d  Far=%4d  -> Norm=%4d (+%d -%d)\n",
+                      finger_names[i], phase_hall_close[i], phase_hall_far[i],
+                      hall_cal[i].normal,
+                      hall_cal[i].front_range, hall_cal[i].back_range);
+    }
+    Serial.println("─── Hall (top) ──────────────────────────");
+    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+        Serial.printf("  %-6s  Close=%4d  Far=%4d  -> Norm=%4d (+%d -%d)\n",
+                      finger_names[i], phase_hall_top_close[i], phase_hall_top_far[i],
+                      hall_top_cal[i].normal,
+                      hall_top_cal[i].front_range, hall_top_cal[i].back_range);
+    }
+    Serial.println("─────────────────────────────────────────\n");
+
+    // Reset phase flags for next calibration run
+    for (int i = 0; i < CALIB_PHASE_COUNT; i++) phase_done[i] = false;
+
+    return true;
 }
 
 bool sensor_module_is_calibrated() { return s_calibrated; }

@@ -53,16 +53,38 @@ struct ProcessedSensorData {
 typedef void (*SensorCalibProgressCb)(int percent);
 
 // ─────────────────────────────────────────────
+//  Multi-phase calibration
+// ─────────────────────────────────────────────
+enum CalibPhase {
+    CALIB_PHASE_FLAT_HAND     = 0,   // Hand flat, fingers extended
+    CALIB_PHASE_FIST_THUMB_UP = 1,   // Closed fist, thumb on top (punching pose)
+    CALIB_PHASE_FIST_THUMB_IN = 2,   // Closed fist, thumb tucked inside fingers
+    CALIB_PHASE_COUNT         = 3
+};
+
+/// Human-readable phase description (for GUI dialogs)
+const char *sensor_calib_phase_title(CalibPhase phase);
+const char *sensor_calib_phase_instruction(CalibPhase phase);
+
+// ─────────────────────────────────────────────
 //  Public API
 // ─────────────────────────────────────────────
 
 /// Initialise internal state (call once)
 void sensor_module_init();
 
-/// Blocking calibration (flat hand, no magnets).
-/// Samples for ~5 s, sets baselines and deadzones.
-/// Optional progress callback for GUI / serial feedback.
+/// Legacy single-phase calibration (flat hand only). Kept for test sketch.
 void sensor_module_calibrate(SensorCalibProgressCb progress_cb = nullptr);
+
+/// NEW: Sample one calibration phase (~3 s blocking).
+/// Call once per phase in order: FLAT → FIST_THUMB_UP → FIST_THUMB_IN.
+/// progress_cb receives 0-100 for THIS phase only.
+void sensor_module_calibrate_phase(CalibPhase phase,
+                                   SensorCalibProgressCb progress_cb = nullptr);
+
+/// NEW: After all 3 phases, compute final calibration parameters
+/// and persist to NVS. Returns true on success.
+bool sensor_module_calibrate_finalize();
 
 /// Is calibration done?
 bool sensor_module_is_calibrated();

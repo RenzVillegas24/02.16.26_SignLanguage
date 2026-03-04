@@ -69,11 +69,15 @@ lv_obj_t *sensor_test_bars[5]   = {};
 lv_obj_t *sensor_test_lbls[5]   = {};
 
 // Calibration dialog widgets
-lv_obj_t *calib_overlay    = nullptr;
-lv_obj_t *calib_bar        = nullptr;
-lv_obj_t *calib_lbl        = nullptr;
-lv_obj_t *lbl_calib_info   = nullptr;
-lv_obj_t *btn_calibrate    = nullptr;
+lv_obj_t *calib_overlay        = nullptr;
+lv_obj_t *calib_bar            = nullptr;
+lv_obj_t *calib_lbl            = nullptr;
+lv_obj_t *calib_dialog         = nullptr;
+lv_obj_t *calib_btn_continue   = nullptr;
+lv_obj_t *calib_btn_cancel     = nullptr;
+lv_obj_t *calib_phase_lbl      = nullptr;
+lv_obj_t *lbl_calib_info       = nullptr;
+lv_obj_t *btn_calibrate        = nullptr;
 
 // Speaker test panel widgets
 lv_obj_t *spk_panel        = nullptr;

@@ -35,6 +35,7 @@ void build_menu() {
 
     mk_nav_btn(cont, LV_SYMBOL_UPLOAD     " Train",    cb_btn_train);
     mk_nav_btn(cont, LV_SYMBOL_EYE_OPEN   " Predict",  cb_btn_predict);
+    mk_nav_btn(cont, LV_SYMBOL_GPS        " Sensors",  cb_btn_sensors_from_menu);
     mk_nav_btn(cont, LV_SYMBOL_SETTINGS   " Settings", cb_btn_settings);
 }
 
@@ -301,7 +302,7 @@ void build_test_sensors() {
 
     add_back_gesture(scr_test_sensors, cb_btn_back_test_sensors);
 
-    // Build calibration overlay (hidden by default, shown on screen load)
+    // Build calibration overlay (hidden by default — multi-phase dialog)
     calib_overlay = lv_obj_create(scr_test_sensors);
     lv_obj_set_size(calib_overlay, SCR_W, SCR_H);
     lv_obj_set_pos(calib_overlay, 0, 0);
@@ -310,33 +311,81 @@ void build_test_sensors() {
     lv_obj_set_style_border_width(calib_overlay, 0, 0);
     lv_obj_clear_flag(calib_overlay, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *dialog = lv_obj_create(calib_overlay);
-    lv_obj_set_size(dialog, BTN_W, 140);
-    lv_obj_align(dialog, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(dialog, tc->card_bg, 0);
-    lv_obj_set_style_bg_opa(dialog, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dialog, 16, 0);
-    lv_obj_set_style_border_width(dialog, 0, 0);
-    lv_obj_set_style_pad_all(dialog, 16, 0);
-    lv_obj_clear_flag(dialog, LV_OBJ_FLAG_SCROLLABLE);
+    calib_dialog = lv_obj_create(calib_overlay);
+    lv_obj_set_size(calib_dialog, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_align(calib_dialog, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(calib_dialog, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(calib_dialog, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(calib_dialog, 16, 0);
+    lv_obj_set_style_border_width(calib_dialog, 0, 0);
+    lv_obj_set_style_pad_all(calib_dialog, 16, 0);
+    lv_obj_set_style_pad_row(calib_dialog, 8, 0);
+    lv_obj_clear_flag(calib_dialog, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(calib_dialog, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(calib_dialog, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    calib_lbl = lv_label_create(dialog);
-    lv_label_set_text(calib_lbl, LV_SYMBOL_REFRESH " Calibrating...\n\nKeep hand flat, no magnets.");
-    lv_obj_set_style_text_font(calib_lbl, &lv_font_montserrat_16, 0);
+    // Phase title (e.g. "Step 1/3: Flat Hand")
+    calib_phase_lbl = lv_label_create(calib_dialog);
+    lv_label_set_text(calib_phase_lbl, "Calibration");
+    lv_obj_set_style_text_font(calib_phase_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(calib_phase_lbl, accent_primary(), 0);
+    lv_obj_set_style_text_align(calib_phase_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(calib_phase_lbl, BTN_W - 40);
+
+    // Instruction / status label
+    calib_lbl = lv_label_create(calib_dialog);
+    lv_label_set_text(calib_lbl, "");
+    lv_obj_set_style_text_font(calib_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(calib_lbl, tc->card_text, 0);
     lv_obj_set_style_text_align(calib_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(calib_lbl, BTN_W - 32);
-    lv_obj_align(calib_lbl, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_width(calib_lbl, BTN_W - 40);
+    lv_label_set_long_mode(calib_lbl, LV_LABEL_LONG_WRAP);
 
-    calib_bar = lv_bar_create(dialog);
+    // Progress bar (hidden during prompt, shown during sampling)
+    calib_bar = lv_bar_create(calib_dialog);
     lv_obj_set_size(calib_bar, BTN_W - 48, 12);
-    lv_obj_align(calib_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_bar_set_range(calib_bar, 0, 100);
     lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(calib_bar, tc->slider_track, LV_PART_MAIN);
     lv_obj_set_style_bg_color(calib_bar, accent_primary(), LV_PART_INDICATOR);
     lv_obj_set_style_radius(calib_bar, 6, LV_PART_MAIN);
     lv_obj_set_style_radius(calib_bar, 6, LV_PART_INDICATOR);
+    lv_obj_add_flag(calib_bar, LV_OBJ_FLAG_HIDDEN);
+
+    // Button row container
+    lv_obj_t *btn_row = lv_obj_create(calib_dialog);
+    lv_obj_set_size(btn_row, BTN_W - 40, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(btn_row, 0, 0);
+    lv_obj_set_style_pad_all(btn_row, 0, 0);
+    lv_obj_set_style_pad_column(btn_row, 8, 0);
+    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Continue button
+    calib_btn_continue = lv_btn_create(btn_row);
+    lv_obj_set_size(calib_btn_continue, (BTN_W - 56) / 2, 40);
+    lv_obj_set_style_bg_color(calib_btn_continue, accent_primary(), 0);
+    lv_obj_set_style_radius(calib_btn_continue, 10, 0);
+    lv_obj_t *lbl_cont = lv_label_create(calib_btn_continue);
+    lv_label_set_text(lbl_cont, LV_SYMBOL_PLAY " Continue");
+    lv_obj_set_style_text_font(lbl_cont, &lv_font_montserrat_14, 0);
+    lv_obj_center(lbl_cont);
+    lv_obj_add_event_cb(calib_btn_continue, cb_calib_continue, LV_EVENT_CLICKED, nullptr);
+
+    // Cancel button
+    calib_btn_cancel = lv_btn_create(btn_row);
+    lv_obj_set_size(calib_btn_cancel, (BTN_W - 56) / 2, 40);
+    lv_obj_set_style_bg_color(calib_btn_cancel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_radius(calib_btn_cancel, 10, 0);
+    lv_obj_t *lbl_canc = lv_label_create(calib_btn_cancel);
+    lv_label_set_text(lbl_canc, LV_SYMBOL_CLOSE " Cancel");
+    lv_obj_set_style_text_font(lbl_canc, &lv_font_montserrat_14, 0);
+    lv_obj_center(lbl_canc);
+    lv_obj_add_event_cb(calib_btn_cancel, cb_calib_cancel, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_add_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
 }
@@ -653,12 +702,16 @@ void populate_test_detail() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Calibration dialog helpers
+//  Calibration dialog helpers (multi-phase)
 // ════════════════════════════════════════════════════════════════════
 void show_calibration_dialog() {
     if (calib_overlay) {
         lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
-        lv_label_set_text(calib_lbl, LV_SYMBOL_REFRESH " Calibrating...\n\nKeep hand flat, no magnets.");
+        lv_obj_add_flag(calib_bar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(calib_btn_continue, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(calib_btn_cancel, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(calib_phase_lbl, "Calibration");
+        lv_label_set_text(calib_lbl, "Prepare for 3-step calibration.\nFollow the instructions for each step.");
         lv_obj_clear_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -673,9 +726,53 @@ void update_calibration_progress(int pct) {
     if (calib_bar) {
         lv_bar_set_value(calib_bar, pct, LV_ANIM_ON);
     }
-    if (pct >= 100 && calib_lbl) {
-        lv_label_set_text(calib_lbl, LV_SYMBOL_OK " Calibration Complete!\n\nReady to test sensors.");
-    }
+}
+
+void show_calib_phase_prompt(int phase) {
+    if (!calib_overlay) return;
+
+    CalibPhase p = (CalibPhase)phase;
+    lv_label_set_text(calib_phase_lbl, sensor_calib_phase_title(p));
+    lv_label_set_text(calib_lbl, sensor_calib_phase_instruction(p));
+
+    // Show buttons, hide progress bar
+    lv_obj_clear_flag(calib_btn_continue, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(calib_btn_cancel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(calib_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
+
+    lv_obj_clear_flag(calib_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void show_calib_phase_sampling(int phase) {
+    if (!calib_overlay) return;
+
+    CalibPhase p = (CalibPhase)phase;
+    lv_label_set_text(calib_phase_lbl, sensor_calib_phase_title(p));
+    lv_label_set_text(calib_lbl, LV_SYMBOL_REFRESH " Sampling...\nHold position still.");
+
+    // Hide buttons, show progress bar
+    lv_obj_add_flag(calib_btn_continue, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(calib_btn_cancel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(calib_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(calib_bar, 0, LV_ANIM_OFF);
+}
+
+void show_calib_complete() {
+    if (!calib_overlay) return;
+
+    lv_label_set_text(calib_phase_lbl, LV_SYMBOL_OK " Complete!");
+    lv_label_set_text(calib_lbl,
+        "All 3 phases calibrated.\n"
+        "Calibration saved to memory.\n\n"
+        "Ready to test sensors.");
+    lv_obj_add_flag(calib_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(calib_btn_continue, LV_OBJ_FLAG_HIDDEN);
+
+    // Show only cancel button as "Close"
+    lv_obj_clear_flag(calib_btn_cancel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *lbl = lv_obj_get_child(calib_btn_cancel, 0);
+    if (lbl) lv_label_set_text(lbl, LV_SYMBOL_OK " Close");
 }
 
 // ════════════════════════════════════════════════════════════════════

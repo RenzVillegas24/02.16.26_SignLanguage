@@ -148,6 +148,10 @@ extern lv_obj_t *sensor_test_lbls[5];
 extern lv_obj_t *calib_overlay;
 extern lv_obj_t *calib_bar;
 extern lv_obj_t *calib_lbl;
+extern lv_obj_t *calib_dialog;        // Dialog card inside overlay
+extern lv_obj_t *calib_btn_continue;  // Continue button (multi-phase)
+extern lv_obj_t *calib_btn_cancel;    // Cancel button (multi-phase)
+extern lv_obj_t *calib_phase_lbl;     // Phase title label (e.g. "Step 1/3")
 extern lv_obj_t *lbl_calib_info;   // Calibration status footer in sensors menu
 extern lv_obj_t *btn_calibrate;    // Calibrate button in sensors menu
 
@@ -283,6 +287,9 @@ void populate_test_detail();
 void show_calibration_dialog();
 void hide_calibration_dialog();
 void update_calibration_progress(int pct);
+void show_calib_phase_prompt(int phase);  // Show dialog for phase with Continue/Cancel
+void show_calib_phase_sampling(int phase); // Switch dialog to sampling mode
+void show_calib_complete();                // Show completion message
 
 // ════════════════════════════════════════════════════════════════════
 //  Internal functions — callbacks
@@ -301,6 +308,7 @@ void cb_btn_back_menu(lv_event_t *e);
 void cb_btn_back_predict(lv_event_t *e);
 void cb_btn_back_tests(lv_event_t *e);
 void cb_btn_back_test_detail(lv_event_t *e);
+void cb_btn_sensors_from_menu(lv_event_t *e);
 
 void cb_splash_timer(lv_timer_t *t);
 
@@ -330,6 +338,8 @@ void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 void cb_btn_back_test_sensors(lv_event_t *e);
 void cb_calibrate(lv_event_t *e);
+void cb_calib_continue(lv_event_t *e);
+void cb_calib_cancel(lv_event_t *e);
 void cb_spk_pause(lv_event_t *e);
 void cb_spk_stop(lv_event_t *e);
 

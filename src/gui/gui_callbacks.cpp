@@ -31,6 +31,19 @@ void cb_btn_local(lv_event_t *e)   { (void)e; nav_to(scr_local, true);   cur_gui
 void cb_btn_web(lv_event_t *e)     { (void)e; nav_to(scr_web, true);     cur_gui_mode=MODE_PREDICT_WEB;    fire_mode(MODE_PREDICT_WEB); }
 void cb_btn_tests(lv_event_t *e)   { (void)e; nav_to(scr_test, true);    cur_gui_mode=MODE_TEST;           fire_mode(MODE_TEST); test_active=-1; }
 
+// Sensors nav button from main menu — goes directly to sensor submenu
+static bool sensors_from_main_menu = false;  // Track navigation origin
+
+void cb_btn_sensors_from_menu(lv_event_t *e) {
+    (void)e;
+    sensors_from_main_menu = true;
+    nav_to(scr_test_sensors, true);
+    cur_gui_mode = MODE_TEST;
+    fire_mode(MODE_TEST);
+    test_active = -1;
+    refresh_calib_info_label();
+}
+
 void cb_btn_back_menu(lv_event_t *e)    { (void)e; nav_to(scr_menu, false);     cur_gui_mode=MODE_MENU; fire_mode(MODE_MENU); }
 void cb_btn_back_predict(lv_event_t *e) { (void)e; nav_to(scr_predict, false);  cur_gui_mode=MODE_MENU; fire_mode(MODE_MENU); }
 void cb_btn_back_tests(lv_event_t *e)   { (void)e; nav_to(scr_settings, false); cur_gui_mode=MODE_SETTINGS; fire_mode(MODE_SETTINGS); test_active=-1; }
@@ -44,7 +57,20 @@ void cb_btn_back_test_detail(lv_event_t *e) {
     }
     cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1;
 }
-void cb_btn_back_test_sensors(lv_event_t *e) { (void)e; nav_to(scr_test, false); cur_gui_mode=MODE_TEST; fire_mode(MODE_TEST); test_active=-1; }
+void cb_btn_back_test_sensors(lv_event_t *e) {
+    (void)e;
+    if (sensors_from_main_menu) {
+        nav_to(scr_menu, false);
+        cur_gui_mode = MODE_MENU;
+        fire_mode(MODE_MENU);
+        sensors_from_main_menu = false;
+    } else {
+        nav_to(scr_test, false);
+        cur_gui_mode = MODE_TEST;
+        fire_mode(MODE_TEST);
+    }
+    test_active = -1;
+}
 
 void cb_splash_timer(lv_timer_t *t) {
     if (stat_bar) {
@@ -207,28 +233,31 @@ void cb_test_mpu(lv_event_t *e) {
 }
 
 // ── Sensors submenu: Real calibration via FreeRTOS task ──
-static volatile int  calib_progress  = 0;
-static volatile bool calib_running   = false;
-static volatile bool calib_done_flag = false;
-static lv_timer_t   *calib_poll_timer = nullptr;
-static TaskHandle_t  calib_task_handle = nullptr;
+// ── Multi-phase calibration state machine ──
+static volatile int  calib_progress     = 0;
+static volatile bool calib_running      = false;
+static volatile bool calib_done_flag    = false;
+static volatile bool calib_cancelled    = false;
+static volatile int  calib_current_phase = 0;   // 0..2 (CalibPhase)
+static lv_timer_t   *calib_poll_timer   = nullptr;
+static TaskHandle_t  calib_task_handle  = nullptr;
 
 // Progress callback called FROM the calibration FreeRTOS task (NOT LVGL-safe)
 static void calib_progress_cb(int pct) {
     calib_progress = pct;
 }
 
-// FreeRTOS task that runs the blocking calibration
-static void calib_task_fn(void *param) {
-    (void)param;
-    sensor_module_calibrate(calib_progress_cb);
+// FreeRTOS task that samples ONE calibration phase
+static void calib_phase_task_fn(void *param) {
+    int phase = (int)(intptr_t)param;
+    sensor_module_calibrate_phase((CalibPhase)phase, calib_progress_cb);
     calib_progress  = 100;
     calib_done_flag = true;
     calib_task_handle = nullptr;
     vTaskDelete(nullptr);
 }
 
-// LVGL timer that polls the volatile progress and updates the UI
+// LVGL timer that polls progress during one phase's sampling
 static void calib_poll_timer_cb(lv_timer_t *t) {
     (void)t;
     int pct = calib_progress;
@@ -241,28 +270,85 @@ static void calib_poll_timer_cb(lv_timer_t *t) {
         // Stop this polling timer
         if (calib_poll_timer) { lv_timer_del(calib_poll_timer); calib_poll_timer = nullptr; }
 
-        hide_calibration_dialog();
-        refresh_calib_info_label();
+        int next_phase = calib_current_phase + 1;
+
+        if (next_phase < CALIB_PHASE_COUNT) {
+            // Show prompt for next phase
+            calib_current_phase = next_phase;
+            show_calib_phase_prompt(next_phase);
+        } else {
+            // All phases done — finalize
+            bool ok = sensor_module_calibrate_finalize();
+            if (ok) {
+                show_calib_complete();
+                refresh_calib_info_label();
+            } else {
+                // Error — hide and show warning
+                hide_calibration_dialog();
+                refresh_calib_info_label();
+            }
+        }
     }
 }
 
-// Start the real calibration sequence
-static void start_real_calibration() {
-    if (calib_running) return;  // already running
+// Start sampling the current phase
+static void start_phase_sampling() {
+    if (calib_running) return;
 
     calib_progress  = 0;
     calib_running   = true;
     calib_done_flag = false;
 
-    show_calibration_dialog();
+    show_calib_phase_sampling(calib_current_phase);
 
-    // Launch FreeRTOS task for blocking calibration
-    xTaskCreatePinnedToCore(calib_task_fn, "calib", 4096, nullptr, 1,
+    // Launch FreeRTOS task for this phase's sampling
+    xTaskCreatePinnedToCore(calib_phase_task_fn, "cal_ph", 4096,
+                            (void *)(intptr_t)calib_current_phase, 1,
                             &calib_task_handle, 1);
 
     // Create LVGL timer to poll progress every 100 ms
     if (calib_poll_timer) lv_timer_del(calib_poll_timer);
     calib_poll_timer = lv_timer_create(calib_poll_timer_cb, 100, nullptr);
+}
+
+// Start the full multi-phase calibration wizard
+static void start_real_calibration() {
+    if (calib_running) return;
+
+    calib_current_phase = 0;
+    calib_cancelled     = false;
+
+    // Show the prompt for phase 0 (flat hand)
+    show_calib_phase_prompt(0);
+}
+
+// Continue button callback (user confirms position → start sampling)
+void cb_calib_continue(lv_event_t *e) {
+    (void)e;
+    start_phase_sampling();
+}
+
+// Cancel button callback (abort calibration)
+void cb_calib_cancel(lv_event_t *e) {
+    (void)e;
+    calib_cancelled = true;
+
+    // If a sampling task is running, we can't easily abort it (it's short ~3s)
+    // but we'll clean up state and close the dialog
+    if (calib_poll_timer) { lv_timer_del(calib_poll_timer); calib_poll_timer = nullptr; }
+
+    calib_running   = false;
+    calib_done_flag = false;
+
+    hide_calibration_dialog();
+
+    // Reset the cancel button text (it may have been changed to "Close")
+    if (calib_btn_cancel) {
+        lv_obj_t *lbl = lv_obj_get_child(calib_btn_cancel, 0);
+        if (lbl) lv_label_set_text(lbl, LV_SYMBOL_CLOSE " Cancel");
+    }
+
+    refresh_calib_info_label();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -400,6 +486,7 @@ void cb_spk_stop(lv_event_t *e) {
 
 void cb_test_sensors(lv_event_t *e) {
     (void)e;
+    sensors_from_main_menu = false;  // came from tests menu
     nav_to(scr_test_sensors, true);
     cur_gui_mode = MODE_TEST;
     fire_mode(MODE_TEST);
