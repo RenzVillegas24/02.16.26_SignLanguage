@@ -17,6 +17,9 @@ void gui_set_mode(AppMode mode);       // Switch to a mode screen
 void gui_set_gesture(const char *text);// Update recognized gesture label
 void gui_set_battery(int pct);         // Update battery indicator
 void gui_set_charging(bool charging);  // Show/hide charging bolt indicator
+void gui_show_charge_popup(bool charging, int pct);  // Full-screen charging overlay (5 s auto-dismiss)
+void gui_hide_charge_popup();                         // Manually dismiss charging popup
+bool gui_charge_popup_visible();
 void gui_set_cpu_usage(int pct);       // Update CPU usage indicator (0-100)
 void gui_show_web_qr(const char *url); // Set QR code content for WEB screen
 void gui_web_set_connected(bool connected); // Toggle WiFi QR ↔ webpage QR

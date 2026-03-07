@@ -117,6 +117,9 @@ static void execute_pending_power_action() {
         // Execution resumes here after wakeup from light sleep
         lv_disp_trig_activity(NULL);   // reset LVGL inactivity so auto-sleep doesn't re-trigger
         Serial.println("[MAIN] Resumed from light sleep");
+        // Drain any USB state-change flag that accumulated while sleeping
+        // so the popup is NOT triggered on wake (only on live plug/unplug).
+        power_usb_state_changed();
         break;
 
     case PWR_SHUTDOWN:
@@ -251,6 +254,13 @@ void setup() {
     // 5. Power
     power_init();
     Serial.println("[MAIN] Power ready");
+    // Drain the initial USB state-change flag produced by the first SY6970 read.
+    // Without this, every cold boot / deep-sleep wakeup would trigger the popup
+    // because the background task transitions usb_connected from false → actual.
+    // We wait just long enough for the first read to complete (~500 ms task period)
+    // then discard the flag so only real live plug/unplug events show the popup.
+    delay(600);
+    power_usb_state_changed();   // silently drain boot-time edge
 
     // 6. System info
     sysinfo_init();
@@ -481,8 +491,11 @@ void loop() {
     // ── Battery & charging indicator (all modes) ────────────────────
     // Immediate update on USB plug / unplug (edge detected by background task)
     if (power_usb_state_changed()) {
-        gui_set_charging(power_is_charging() || power_usb_connected());
+        bool charging = power_is_charging() || power_usb_connected();
+        gui_set_charging(charging);
         gui_set_battery(power_battery_percent());
+        // Show full-screen charging popup for 5 seconds
+        gui_show_charge_popup(charging, power_battery_percent());
     }
     // Periodic refresh for normal battery % drift
     if (now - last_bat_read >= BATTERY_READ_INTERVAL_MS) {

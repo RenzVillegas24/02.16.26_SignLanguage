@@ -181,6 +181,13 @@ extern lv_obj_t *lock_icon_lbl;
 extern lv_obj_t *lock_main_lbl;
 extern lv_obj_t *lock_bat_lbl;
 
+// Charging popup overlay (on lv_layer_top — topmost)
+extern lv_obj_t *charge_popup_overlay;
+extern lv_obj_t *charge_popup_icon;
+extern lv_obj_t *charge_popup_pct;
+extern lv_obj_t *charge_popup_status;
+extern lv_timer_t *charge_popup_timer;
+
 // ════════════════════════════════════════════════════════════════════
 //  Styles
 // ════════════════════════════════════════════════════════════════════
@@ -283,6 +290,7 @@ void build_status_bar();
 void build_power_menu();
 void build_sleep_warning();
 void build_lock_screen();
+void build_charge_popup();
 void populate_test_detail();
 void show_calibration_dialog();
 void hide_calibration_dialog();

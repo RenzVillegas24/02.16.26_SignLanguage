@@ -951,3 +951,60 @@ void build_lock_screen() {
     // ── Hidden by default ──
     lv_obj_add_flag(lock_overlay, LV_OBJ_FLAG_HIDDEN);
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  Charging Popup Overlay (topmost overlay on lv_layer_top)
+//  Shows for 5 seconds on charger plug/unplug; visible on top of
+//  every screen including lock screen and sleep warning.
+// ════════════════════════════════════════════════════════════════════
+void build_charge_popup() {
+    lv_obj_t *top = lv_layer_top();
+
+    // ── Full-screen semi-transparent backdrop ──
+    charge_popup_overlay = lv_obj_create(top);
+    lv_obj_set_size(charge_popup_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(charge_popup_overlay, 0, 0);
+    lv_obj_set_style_bg_color(charge_popup_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(charge_popup_overlay, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(charge_popup_overlay, 0, 0);
+    lv_obj_set_style_radius(charge_popup_overlay, 0, 0);
+    lv_obj_clear_flag(charge_popup_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Centred card ──
+    lv_obj_t *card = lv_obj_create(charge_popup_overlay);
+    lv_obj_set_size(card, 200, LV_SIZE_CONTENT);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 20, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_pad_all(card, 24, 0);
+    lv_obj_set_style_pad_row(card, 6, 0);
+    lv_obj_set_layout(card, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Large charging icon ──
+    charge_popup_icon = lv_label_create(card);
+    lv_label_set_text(charge_popup_icon, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_font(charge_popup_icon, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(charge_popup_icon, lv_color_make(0x4C, 0xAF, 0x50), 0);
+
+    // ── Battery percentage ──
+    charge_popup_pct = lv_label_create(card);
+    lv_label_set_text(charge_popup_pct, "100%");
+    lv_obj_set_style_text_font(charge_popup_pct, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_color(charge_popup_pct, lv_color_make(0x4C, 0xAF, 0x50), 0);
+
+    // ── Status text ──
+    charge_popup_status = lv_label_create(card);
+    lv_label_set_text(charge_popup_status, "Charging");
+    lv_obj_set_style_text_font(charge_popup_status, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(charge_popup_status, tc->sub_text, 0);
+    lv_obj_set_style_text_align(charge_popup_status, LV_TEXT_ALIGN_CENTER, 0);
+
+    // ── Hidden by default ──
+    lv_obj_add_flag(charge_popup_overlay, LV_OBJ_FLAG_HIDDEN);
+}

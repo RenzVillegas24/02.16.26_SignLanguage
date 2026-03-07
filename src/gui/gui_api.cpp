@@ -105,6 +105,13 @@ lv_obj_t *lock_icon_lbl = nullptr;
 lv_obj_t *lock_main_lbl = nullptr;
 lv_obj_t *lock_bat_lbl  = nullptr;
 
+// Charging popup overlay widgets
+lv_obj_t *charge_popup_overlay = nullptr;
+lv_obj_t *charge_popup_icon    = nullptr;
+lv_obj_t *charge_popup_pct     = nullptr;
+lv_obj_t *charge_popup_status  = nullptr;
+lv_timer_t *charge_popup_timer = nullptr;
+
 // ════════════════════════════════════════════════════════════════════
 //  Settings state
 // ════════════════════════════════════════════════════════════════════
@@ -210,6 +217,7 @@ void gui_init() {
     build_power_menu();
     build_sleep_warning();
     build_lock_screen();
+    build_charge_popup();
 
     lv_scr_load(scr_splash);
     if (stat_bar) lv_obj_add_flag(stat_bar, LV_OBJ_FLAG_HIDDEN);
@@ -558,6 +566,83 @@ void gui_lock_update_battery(int pct) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%s %d%%", icon, pct);
     lv_label_set_text(lock_bat_lbl, buf);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Charging popup overlay (5-second auto-dismiss)
+// ════════════════════════════════════════════════════════════════
+static void charge_popup_timer_cb(lv_timer_t *t) {
+    (void)t;
+    gui_hide_charge_popup();
+}
+
+void gui_show_charge_popup(bool charging, int pct) {
+    if (!charge_popup_overlay) return;
+
+    // ── Update icon ──
+    const char *icon;
+    if      (pct > 80) icon = LV_SYMBOL_BATTERY_FULL;
+    else if (pct > 50) icon = LV_SYMBOL_BATTERY_3;
+    else if (pct > 25) icon = LV_SYMBOL_BATTERY_2;
+    else if (pct > 10) icon = LV_SYMBOL_BATTERY_1;
+    else               icon = LV_SYMBOL_BATTERY_EMPTY;
+
+    if (charge_popup_icon) {
+        if (charging)
+            lv_label_set_text(charge_popup_icon, LV_SYMBOL_CHARGE);
+        else
+            lv_label_set_text(charge_popup_icon, icon);
+    }
+
+    // ── Update percentage ──
+    if (charge_popup_pct) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d%%", pct);
+        lv_label_set_text(charge_popup_pct, buf);
+    }
+
+    // ── Update status text ──
+    if (charge_popup_status) {
+        if (charging)
+            lv_label_set_text(charge_popup_status, "Charging");
+        else
+            lv_label_set_text(charge_popup_status, "Unplugged");
+    }
+
+    // ── Update colour ──
+    lv_color_t clr = charging ? lv_color_make(0x4C, 0xAF, 0x50)    // green
+                              : lv_color_make(0xFF, 0x57, 0x22);   // deep orange
+    if (charge_popup_icon)
+        lv_obj_set_style_text_color(charge_popup_icon, clr, 0);
+    if (charge_popup_pct)
+        lv_obj_set_style_text_color(charge_popup_pct, clr, 0);
+
+    // ── Show overlay (topmost) ──
+    lv_obj_clear_flag(charge_popup_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(charge_popup_overlay);
+
+    // ── (Re)start 5-second auto-dismiss timer ──
+    if (charge_popup_timer) {
+        lv_timer_reset(charge_popup_timer);
+        lv_timer_resume(charge_popup_timer);
+    } else {
+        charge_popup_timer = lv_timer_create(charge_popup_timer_cb, 5000, NULL);
+        lv_timer_set_repeat_count(charge_popup_timer, 1);
+    }
+}
+
+void gui_hide_charge_popup() {
+    if (charge_popup_overlay)
+        lv_obj_add_flag(charge_popup_overlay, LV_OBJ_FLAG_HIDDEN);
+    if (charge_popup_timer) {
+        lv_timer_del(charge_popup_timer);
+        charge_popup_timer = nullptr;
+    }
+}
+
+bool gui_charge_popup_visible() {
+    return charge_popup_overlay
+        && !lv_obj_has_flag(charge_popup_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ════════════════════════════════════════════════════════════════════

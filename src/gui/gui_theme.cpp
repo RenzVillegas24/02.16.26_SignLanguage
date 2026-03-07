@@ -160,6 +160,11 @@ void apply_theme() {
     lock_icon_lbl      = nullptr;
     lock_main_lbl      = nullptr;
     lock_bat_lbl       = nullptr;
+    charge_popup_overlay = nullptr;
+    charge_popup_icon    = nullptr;
+    charge_popup_pct     = nullptr;
+    charge_popup_status  = nullptr;
+    if (charge_popup_timer) { lv_timer_del(charge_popup_timer); charge_popup_timer = nullptr; }
 
     // Delete all screens
     del_scr(scr_menu);
@@ -187,6 +192,7 @@ void apply_theme() {
     build_power_menu();          // recreate power menu on lv_layer_top
     build_sleep_warning();       // recreate sleep warning on lv_layer_top
     build_lock_screen();         // recreate lock screen on lv_layer_top
+    build_charge_popup();        // recreate charge popup on lv_layer_top
 
     // Return to settings
     lv_scr_load(scr_settings);
