@@ -158,8 +158,8 @@ static void pwr_read_task(void* /*arg*/) {
                 str_copy(s_info.battery_fault,      sizeof(s_info.battery_fault),      _bf);
                 str_copy(s_info.ntc_fault,           sizeof(s_info.ntc_fault),           _nf);
 
-                // Battery percentage (LiPo 3.0V = 0%, 4.2V = 100%)
-                float pct = (s_info.battery_mv / 1000.0f - 3.0f) / (4.2f - 3.0f) * 100.0f;
+                // Battery percentage (LiPo 3.0V = 0%, 4.104V = 100%)
+                float pct = (s_info.battery_mv / 1000.0f - 3.0f) / (4.104f - 3.0f) * 100.0f;
                 s_info.battery_pct = constrain((int)pct, 0, 100);
 
                 xSemaphoreGive(pwr_mutex);
