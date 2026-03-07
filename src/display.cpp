@@ -106,13 +106,14 @@ static void lvgl_touch_cb(lv_indev_drv_t * /*drv*/, lv_indev_data_t *data) {
 }
 
 static void lvgl_rounder_cb(lv_disp_drv_t * /*drv*/, lv_area_t *area) {
-    // CO5300 requires even-aligned coordinates
-    if (area->x1 % 2 != 0) area->x1 += 1;
-    if (area->y1 % 2 != 0) area->y1 += 1;
-    uint32_t w = (area->x2 - area->x1 + 1);
-    uint32_t h = (area->y2 - area->y1 + 1);
-    if (w % 2 != 0) area->x2 -= 1;
-    if (h % 2 != 0) area->y2 -= 1;
+    // CO5300 has artefacts (1 px black line on left edge) with partial-width
+    // RAM writes.  Force every dirty band to span the full screen width so
+    // CASET always covers columns 0…LCD_WIDTH-1 (hw 20…299).
+    // Height stays partial for efficiency; rows are rounded to even.
+    area->x1 = 0;
+    area->x2 = LCD_WIDTH - 1;        // always full width  (even 280)
+    area->y1 = area->y1 & ~1;        // round down to even
+    area->y2 = area->y2 | 1;         // round up  to odd  → height is even
 }
 
 // ── Brightness tracking ──────────────────────
