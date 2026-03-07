@@ -4,6 +4,7 @@
  *        mapping, serial / OLED output, and Edge Impulse prediction stub.
  */
 #include "sensor_module.h"
+#include "sensors.h"
 #include <math.h>
 #include <Preferences.h>
 
@@ -161,7 +162,18 @@ static void isort(uint16_t *arr, uint8_t n) {
 }
 
 static uint16_t mux_read_oversampled(uint8_t ch) {
-    // Select channel (mux hardware already initialised by sensors_init)
+    // ── Prefer ADS1115 16-bit ADC when available ──
+    // With 16-bit resolution, 4 samples is plenty (vs 16 for the 12-bit ESP ADC).
+    // sensors_mux_read() handles I2C mutex + mux select internally.
+    if (sensors_ads_available()) {
+        const int N = 4;
+        uint32_t sum = 0;
+        for (int i = 0; i < N; i++)
+            sum += sensors_mux_read(ch);
+        return (uint16_t)(sum / N);
+    }
+
+    // ── Fallback: ESP32 internal ADC — oversampled trimmed mean ──
     digitalWrite(MUX_S0, (ch >> 0) & 1);
     digitalWrite(MUX_S1, (ch >> 1) & 1);
     digitalWrite(MUX_S2, (ch >> 2) & 1);

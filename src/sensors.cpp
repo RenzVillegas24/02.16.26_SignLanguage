@@ -1,9 +1,20 @@
 /*
  * @file sensors.cpp
- * @brief CD74HC4067 multiplexer + MPU6050 IMU sensor reading
+ * @brief CD74HC4067 multiplexer + ADS1115 16-bit ADC + MPU6050 IMU
+ *
+ * Sensor reading runs on a FreeRTOS task pinned to Core 0.  This keeps
+ * the LVGL rendering loop on Core 1 completely free of blocking I2C waits.
+ *
+ * An I2C mutex (i2c_mutex) coordinates Wire access between:
+ *   • Sensor background task   — takes mutex per-batch, releases between batches
+ *   • FT3168 touch controller  — try-locks in the LVGL input callback
+ *
+ * Between each batch of 5 ADS1115 reads (~6 ms) the mutex is released
+ * for ≥ 2 ms, giving the touch controller reliable I2C windows.
  */
 #include "sensors.h"
 #include <Wire.h>
+#include <Adafruit_ADS1X15.h>
 #include "driver/gpio.h"
 
 // ── Lightweight MPU6050 driver (no heavy library) ──
@@ -16,11 +27,41 @@
 #define MPU6050_ACCEL_CONFIG 0x1C
 
 static bool  mpu_ok = false;
+static Adafruit_ADS1115 ads;
+static bool  ads_ok = false;
+
+// ── I2C bus mutex (shared with touch controller in display.cpp) ──
+SemaphoreHandle_t i2c_mutex = NULL;
+
+// ── Background sensor task ──────────────────
+static TaskHandle_t  s_task       = NULL;
+static volatile bool s_active     = true;       // false → task idles (menu modes)
+static SensorData    s_shared     = {};         // latest data (written by task, read by main)
+static portMUX_TYPE  s_spin       = portMUX_INITIALIZER_UNLOCKED;
+
+// ── I2C bus scanner ──────────────────────────
+static void i2c_scan() {
+    Serial.println("[SENSORS] I2C bus scan:");
+    uint8_t count = 0;
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial.printf("[SENSORS]   0x%02X", addr);
+            if (addr == MPU6050_ADDR)      Serial.print(" (MPU6050)");
+            else if (addr == ADS1115_ADDR) Serial.print(" (ADS1115)");
+            else if (addr == 0x38)         Serial.print(" (FT3168 touch)");
+            Serial.println();
+            count++;
+        }
+    }
+    if (count == 0)
+        Serial.println("[SENSORS]   ** No devices found — check wiring! **");
+    else
+        Serial.printf("[SENSORS]   %d device(s) on bus\n", count);
+}
 
 // ── Mux helpers ──────────────────────────────
 static void mux_init() {
-    // Release any GPIO hold that was set before the previous deep sleep.
-    // gpio_hold_en() keeps pins locked after reset until explicitly released.
     gpio_hold_dis((gpio_num_t)MUX_S0);
     gpio_hold_dis((gpio_num_t)MUX_S1);
     gpio_hold_dis((gpio_num_t)MUX_S2);
@@ -30,7 +71,6 @@ static void mux_init() {
     pinMode(MUX_S1, OUTPUT);
     pinMode(MUX_S2, OUTPUT);
     pinMode(MUX_S3, OUTPUT);
-    analogReadResolution(12);   // 0-4095
 }
 
 static void mux_select(uint8_t ch) {
@@ -41,8 +81,12 @@ static void mux_select(uint8_t ch) {
     delayMicroseconds(MUX_SETTLE_US);
 }
 
-static uint16_t mux_read(uint8_t ch) {
-    mux_select(ch);
+/// Read ADS1115 A0 (or fall back to ESP32 ADC).  Caller must hold i2c_mutex.
+static uint16_t ads_or_adc_read() {
+    if (ads_ok) {
+        int16_t raw = ads.readADC_SingleEnded(0);
+        return (raw < 0) ? 0 : (uint16_t)raw;
+    }
     return analogRead(MUX_SIG);
 }
 
@@ -93,103 +137,181 @@ static void mpu_read_raw(int16_t *ax, int16_t *ay, int16_t *az,
     *gz = (Wire.read() << 8) | Wire.read();
 }
 
-// ── Public API ───────────────────────────────
-void sensors_init() {
-    mux_init();
-
-    // I2C already started by display/touch - just init MPU
-    mpu_ok = mpu_init();
-    if (mpu_ok) {
-        Serial.println("[SENSORS] MPU6050 OK");
-    } else {
-        Serial.println("[SENSORS] MPU6050 not found (will work without IMU)");
-    }
-    Serial.println("[SENSORS] Multiplexer ready");
-}
-
-bool sensors_mpu_available() { return mpu_ok; }
-
-void sensors_read(SensorData &d) {
-    // Read flex sensors — non-sequential channels (0,1,2,6,7).
-    // Ring and Pinky are on ch6/ch7; ch3-ch5 are Hall Top sensors.
-    // Using the same lookup table as sensor_module to stay in sync.
+// ── Background sensor task ───────────────────
+// Reads all 15 mux channels + MPU6050 in a cycle.  Releases the I2C mutex
+// between each batch of 5 channels so the touch controller gets windows.
+static void sensor_task_fn(void *) {
     static const uint8_t flex_ch[NUM_FLEX_SENSORS] = {
         MUX_CH_FLEX_THUMB,  MUX_CH_FLEX_INDEX,  MUX_CH_FLEX_MIDDLE,
         MUX_CH_FLEX_RING,   MUX_CH_FLEX_PINKY
     };
-    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        d.flex[i] = mux_read(flex_ch[i]);
-    }
-    // Read hall sensors — side (C8-C12)
-    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
-        d.hall[i] = mux_read(MUX_CH_HALL_THUMB + i);
-    }
-    // Read hall sensors — top (C3,C4,C5,C13,C14)
-    {
-        static const uint8_t ht_ch[NUM_HALL_TOP_SENSORS] = {
-            MUX_CH_HALL_TOP_THUMB,  MUX_CH_HALL_TOP_INDEX,
-            MUX_CH_HALL_TOP_MIDDLE, MUX_CH_HALL_TOP_RING,
-            MUX_CH_HALL_TOP_PINKY
-        };
-        for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-            d.hall_top[i] = mux_read(ht_ch[i]);
+    static const uint8_t ht_ch[NUM_HALL_TOP_SENSORS] = {
+        MUX_CH_HALL_TOP_THUMB,  MUX_CH_HALL_TOP_INDEX,
+        MUX_CH_HALL_TOP_MIDDLE, MUX_CH_HALL_TOP_RING,
+        MUX_CH_HALL_TOP_PINKY
+    };
+
+    for (;;) {
+        if (!s_active) {
+            vTaskDelay(pdMS_TO_TICKS(100));   // idle — check again in 100 ms
+            continue;
         }
+
+        SensorData d = {};
+
+        // ── Flex sensors (5 channels, ~6 ms with ADS1115) ──
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+            for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+                mux_select(flex_ch[i]);
+                d.flex[i] = ads_or_adc_read();
+            }
+            xSemaphoreGive(i2c_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));         // window for touch
+
+        // ── Hall sensors — side (5 channels) ──
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+            for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+                mux_select(MUX_CH_HALL_THUMB + i);
+                d.hall[i] = ads_or_adc_read();
+            }
+            xSemaphoreGive(i2c_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+
+        // ── Hall sensors — top (5 channels) ──
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+            for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
+                mux_select(ht_ch[i]);
+                d.hall_top[i] = ads_or_adc_read();
+            }
+            xSemaphoreGive(i2c_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+
+        // ── MPU6050 (single burst read, ~1 ms) ──
+        if (mpu_ok) {
+            if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+                int16_t ax, ay, az, gx, gy, gz;
+                mpu_read_raw(&ax, &ay, &az, &gx, &gy, &gz);
+                xSemaphoreGive(i2c_mutex);
+
+                d.accel_x = ax / 16384.0f * 9.81f;
+                d.accel_y = ay / 16384.0f * 9.81f;
+                d.accel_z = az / 16384.0f * 9.81f;
+                d.gyro_x  = gx / 131.0f;
+                d.gyro_y  = gy / 131.0f;
+                d.gyro_z  = gz / 131.0f;
+                d.pitch = atan2f(d.accel_x, sqrtf(d.accel_y * d.accel_y + d.accel_z * d.accel_z)) * 180.0f / PI;
+                d.roll  = atan2f(d.accel_y, sqrtf(d.accel_x * d.accel_x + d.accel_z * d.accel_z)) * 180.0f / PI;
+            }
+        }
+
+        // ── Publish to shared buffer (atomic copy via spinlock) ──
+        taskENTER_CRITICAL(&s_spin);
+        s_shared = d;
+        taskEXIT_CRITICAL(&s_spin);
+
+        // Pace: ~25–30 Hz effective rate with the inter-batch delays above
+        vTaskDelay(pdMS_TO_TICKS(8));
     }
+}
 
-    // Read MPU6050
-    if (mpu_ok) {
-        int16_t ax, ay, az, gx, gy, gz;
-        mpu_read_raw(&ax, &ay, &az, &gx, &gy, &gz);
+// ── Public API ───────────────────────────────
+void sensors_init() {
+    mux_init();
 
-        // Convert to real units
-        d.accel_x = ax / 16384.0f * 9.81f;
-        d.accel_y = ay / 16384.0f * 9.81f;
-        d.accel_z = az / 16384.0f * 9.81f;
-        d.gyro_x  = gx / 131.0f;
-        d.gyro_y  = gy / 131.0f;
-        d.gyro_z  = gz / 131.0f;
+    // Create I2C mutex FIRST — touch callback checks for non-NULL before locking
+    i2c_mutex = xSemaphoreCreateMutex();
 
-        // Simple pitch / roll from accel
-        d.pitch = atan2f(d.accel_x, sqrtf(d.accel_y * d.accel_y + d.accel_z * d.accel_z)) * 180.0f / PI;
-        d.roll  = atan2f(d.accel_y, sqrtf(d.accel_x * d.accel_x + d.accel_z * d.accel_z)) * 180.0f / PI;
+    // ── I2C bus scan (mutex-protected) ──
+    xSemaphoreTake(i2c_mutex, portMAX_DELAY);
+    i2c_scan();
+    xSemaphoreGive(i2c_mutex);
+
+    // ── ADS1115 16-bit ADC ──
+    xSemaphoreTake(i2c_mutex, portMAX_DELAY);
+    ads_ok = ads.begin(ADS1115_ADDR, &Wire);
+    if (ads_ok) {
+        ads.setGain(GAIN_ONE);
+        ads.setDataRate(RATE_ADS1115_860SPS);
+        Serial.println("[SENSORS] ADS1115 OK (16-bit, 860 SPS, GAIN_ONE)");
     } else {
-        d.accel_x = d.accel_y = d.accel_z = 0;
-        d.gyro_x  = d.gyro_y  = d.gyro_z  = 0;
-        d.pitch   = d.roll = 0;
+        Serial.println("[SENSORS] ADS1115 not found — falling back to internal ADC");
+        analogReadResolution(12);
     }
+    xSemaphoreGive(i2c_mutex);
+
+    // ── MPU6050 IMU ──
+    xSemaphoreTake(i2c_mutex, portMAX_DELAY);
+    mpu_ok = mpu_init();
+    xSemaphoreGive(i2c_mutex);
+    Serial.printf("[SENSORS] MPU6050 %s\n", mpu_ok ? "OK" : "not found");
+
+    // ── Start background reading task on Core 0 ──
+    xTaskCreatePinnedToCore(sensor_task_fn, "sensors", 4096,
+                            NULL, 2, &s_task, 0);
+    Serial.println("[SENSORS] Background task started (Core 0)");
+}
+
+bool sensors_mpu_available() { return mpu_ok; }
+bool sensors_ads_available() { return ads_ok; }
+
+void sensors_set_active(bool active) {
+    s_active = active;
+}
+
+void sensors_read(SensorData &d) {
+    // Non-blocking: just copy the latest data published by the background task
+    taskENTER_CRITICAL(&s_spin);
+    d = s_shared;
+    taskEXIT_CRITICAL(&s_spin);
+}
+
+uint16_t sensors_mux_read(uint8_t ch) {
+    // Public single-channel read for calibration etc.
+    // Takes the mutex internally — caller must NOT already hold it.
+    uint16_t val = 0;
+    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(50))) {
+        mux_select(ch);
+        val = ads_or_adc_read();
+        xSemaphoreGive(i2c_mutex);
+    }
+    return val;
 }
 
 // ── Shutdown — called before deep sleep ──────
 void sensors_shutdown() {
-    // 1. Put MPU6050 into hardware sleep mode (~5 µA vs ~3.5 mA active)
-    //    Write SLEEP bit (bit 6) to PWR_MGMT_1 register 0x6B
-    if (mpu_ok) {
-        mpu_write(MPU6050_PWR_MGMT_1, 0x40);   // SLEEP = 1
+    // 1. Stop background task
+    s_active = false;
+    if (s_task) {
+        vTaskDelay(pdMS_TO_TICKS(20));  // let task reach idle
+        vTaskDelete(s_task);
+        s_task = NULL;
+    }
+
+    // 2. Put MPU6050 into hardware sleep mode
+    if (mpu_ok && i2c_mutex) {
+        xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100));
+        mpu_write(MPU6050_PWR_MGMT_1, 0x40);
+        xSemaphoreGive(i2c_mutex);
         Serial.println("[SENSORS] MPU6050 → sleep mode");
         mpu_ok = false;
     }
 
-    // 2. Drive CD74HC4067 select lines LOW (deselect all channels)
-    //    then lock them LOW with gpio_hold_en().
-    //
-    //    CRITICAL: if we set these to INPUT (floating), the CMOS input
-    //    buffers of the 74HC4067 sit at ~VCC/2 during deep sleep, causing
-    //    both P- and N-transistors to conduct simultaneously (shoot-through).
-    //    That draws 3-5 mA per pin (12-20 mA total = ~50 mW).
-    //    gpio_hold_en() keeps the OUTPUT LOW state latched through deep
-    //    sleep even after the digital GPIO domain powers down.
+    // 3. Lock mux GPIOs LOW for deep sleep
     digitalWrite(MUX_S0, LOW);
     digitalWrite(MUX_S1, LOW);
     digitalWrite(MUX_S2, LOW);
     digitalWrite(MUX_S3, LOW);
-    // Pins remain configured as OUTPUT from mux_init() — just lock the level
     gpio_hold_en((gpio_num_t)MUX_S0);
     gpio_hold_en((gpio_num_t)MUX_S1);
     gpio_hold_en((gpio_num_t)MUX_S2);
     gpio_hold_en((gpio_num_t)MUX_S3);
 
-    // 3. ADC signal pin → input with pull-down (well-defined LOW during sleep)
-    pinMode(MUX_SIG, INPUT_PULLDOWN);
+    if (!ads_ok) {
+        pinMode(MUX_SIG, INPUT_PULLDOWN);
+    }
 
     Serial.println("[SENSORS] Mux GPIOs locked LOW for deep sleep");
 }

@@ -15,7 +15,10 @@
 #define MUX_S1          47
 #define MUX_S2          48
 #define MUX_S3          45
-#define MUX_SIG         1       // ADC1_CH0
+#define MUX_SIG         1       // MUX analog output pin (unused when ADS1115 is present)
+
+// ADS1115 16-bit external ADC (reads MUX output via A0)
+#define ADS1115_ADDR    0x48    // ADDR pin → GND
 
 // Multiplexer channel assignments
 #define MUX_CH_FLEX_THUMB   0
@@ -87,9 +90,9 @@ enum AppMode {
 //  Sensor Data Structure
 // ─────────────────────────────────────────────
 struct SensorData {
-    uint16_t flex[NUM_FLEX_SENSORS];         // Raw ADC 0-4095
-    uint16_t hall[NUM_HALL_SENSORS];         // Raw ADC 0-4095 (side of finger)
-    uint16_t hall_top[NUM_HALL_TOP_SENSORS]; // Raw ADC 0-4095 (top of finger)
+    uint16_t flex[NUM_FLEX_SENSORS];         // Raw ADC (0-32767 via ADS1115, 0-4095 fallback)
+    uint16_t hall[NUM_HALL_SENSORS];         // Raw ADC (side of finger)
+    uint16_t hall_top[NUM_HALL_TOP_SENSORS]; // Raw ADC (top of finger)
     float    accel_x, accel_y, accel_z;      // m/s²
     float    gyro_x,  gyro_y,  gyro_z;      // rad/s
     float    pitch, roll;                    // Degrees

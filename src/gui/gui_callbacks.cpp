@@ -5,6 +5,7 @@
  */
 #include "gui_internal.h"
 #include "sensor_module/sensor_module.h"
+#include "sensors.h"
 #include "test_sound_module.h"
 #include "audio.h"
 
@@ -279,6 +280,10 @@ static void calib_poll_timer_cb(lv_timer_t *t) {
         } else {
             // All phases done — finalize
             bool ok = sensor_module_calibrate_finalize();
+
+            // Resume background sensor reading
+            sensors_set_active(true);
+
             if (ok) {
                 show_calib_complete();
                 refresh_calib_info_label();
@@ -318,6 +323,9 @@ static void start_real_calibration() {
     calib_current_phase = 0;
     calib_cancelled     = false;
 
+    // Pause background sensor task — avoids mux-select races during calibration
+    sensors_set_active(false);
+
     // Show the prompt for phase 0 (flat hand)
     show_calib_phase_prompt(0);
 }
@@ -339,6 +347,9 @@ void cb_calib_cancel(lv_event_t *e) {
 
     calib_running   = false;
     calib_done_flag = false;
+
+    // Resume background sensor reading (paused at calibration start)
+    sensors_set_active(true);
 
     hide_calibration_dialog();
 

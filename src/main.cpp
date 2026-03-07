@@ -61,6 +61,12 @@ static void on_mode_change(AppMode m) {
     AppMode prev = current_mode;
     current_mode = m;
 
+    // Activate/deactivate background sensor reading based on mode.
+    // Menu & Settings don't need live sensor data.
+    bool need_sensors = (m == MODE_TRAIN || m == MODE_PREDICT_LOCAL
+                      || m == MODE_PREDICT_WEB || m == MODE_TEST);
+    sensors_set_active(need_sensors);
+
     // Start / stop web server as needed
     if (m == MODE_PREDICT_WEB && !web_server_is_running()) {
         web_server_start();
@@ -405,11 +411,16 @@ void loop() {
         }
     }
 
-    // ── Read sensors ───────────────────────────────────────────────
+    // ── Read sensors (non-blocking — copies from background task) ──
     if (now - last_sensor >= SENSOR_READ_INTERVAL_MS) {
         last_sensor = now;
         sensors_read(sensor_data);
         sensor_module_process(sensor_data, processed_data);
+
+        // Classify gesture only when new data arrives (was running every loop!)
+        if (current_mode == MODE_PREDICT_LOCAL || current_mode == MODE_PREDICT_WEB) {
+            classify_gesture();
+        }
     }
 
     // ── Mode-specific logic ────────────────────────────────────────
@@ -424,7 +435,6 @@ void loop() {
         break;
 
     case MODE_PREDICT_LOCAL:
-        classify_gesture();
         if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             if (gui_local_show_sensors())
@@ -441,7 +451,6 @@ void loop() {
         break;
 
     case MODE_PREDICT_WEB:
-        classify_gesture();
         if (!lock_active) {
             web_server_update(sensor_data, gesture_text);
             gui_web_set_connected(web_server_num_clients() > 0);
@@ -503,4 +512,7 @@ void loop() {
         sysinfo_update((uint8_t)cpu_pct, lvgl_fps);
         gui_update_about(sysinfo_get());
     }
+
+    // ── Yield to FreeRTOS — let background tasks (sensors, WiFi) breathe ──
+    delay(1);
 }

@@ -5,6 +5,7 @@
  */
 #include "display.h"
 #include "power.h"
+#include "sensors.h"        // for i2c_mutex
 
 // ── Hardware objects ──────────────────────────
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -43,9 +44,38 @@ static void lvgl_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     lv_disp_flush_ready(disp);
 }
 
+// ── Touch state cache ────────────────────────
+// LVGL defaults data->state to LV_INDEV_STATE_RELEASED before each read_cb call.
+// The FT3168 fires interrupts at ~60 Hz but LVGL polls at 66 Hz (15 ms), so
+// there *will* be read cycles with no new hardware data.  Without caching, those
+// cycles report RELEASED mid-swipe, which resets the back-gesture tracker.
+// We also must not leave state=RELEASED when the mutex was just temporarily busy.
+static lv_indev_state_t s_touch_state = LV_INDEV_STATE_REL;
+static lv_coord_t       s_touch_x     = 0;
+static lv_coord_t       s_touch_y     = 0;
+// Stale-press guard: if no interrupt arrives within this many ms while pressed,
+// force a release so a stuck state can never happen.
+static uint32_t         s_last_irq_ms = 0;
+static const uint32_t   TOUCH_STALE_MS = 250;
+
 static void lvgl_touch_cb(lv_indev_drv_t * /*drv*/, lv_indev_data_t *data) {
+    uint32_t now = millis();
+
     if (touch_controller->IIC_Interrupt_Flag) {
+        // New hardware data is ready — try to read it.
+        // Try-lock: if sensor task holds I2C, skip the HW read this cycle
+        // but keep reporting the last known state (NOT a spurious release).
+        if (i2c_mutex && xSemaphoreTake(i2c_mutex, 0) != pdTRUE) {
+            // Bus busy — carry forward last state unchanged.
+            // Leave IIC_Interrupt_Flag set so we retry next cycle.
+            data->state   = s_touch_state;
+            data->point.x = s_touch_x;
+            data->point.y = s_touch_y;
+            return;
+        }
+
         touch_controller->IIC_Interrupt_Flag = false;
+        s_last_irq_ms = now;
 
         int32_t x = touch_controller->IIC_Read_Device_Value(
             Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
@@ -54,14 +84,25 @@ static void lvgl_touch_cb(lv_indev_drv_t * /*drv*/, lv_indev_data_t *data) {
         uint8_t n = touch_controller->IIC_Read_Device_Value(
             Arduino_IIC_Touch::Value_Information::TOUCH_FINGER_NUMBER);
 
+        if (i2c_mutex) xSemaphoreGive(i2c_mutex);
+
         if (n > 0) {
-            data->state   = LV_INDEV_STATE_PR;
-            data->point.x = x;
-            data->point.y = y;
+            s_touch_state = LV_INDEV_STATE_PR;
+            s_touch_x     = (lv_coord_t)x;
+            s_touch_y     = (lv_coord_t)y;
         } else {
-            data->state = LV_INDEV_STATE_REL;
+            s_touch_state = LV_INDEV_STATE_REL;
         }
+    } else if (s_touch_state == LV_INDEV_STATE_PR
+               && (now - s_last_irq_ms) > TOUCH_STALE_MS) {
+        // No interrupt for too long while pressed — force release so we never
+        // get stuck in a phantom-pressed state (e.g. if lift interrupt was lost).
+        s_touch_state = LV_INDEV_STATE_REL;
     }
+
+    data->state   = s_touch_state;
+    data->point.x = s_touch_x;
+    data->point.y = s_touch_y;
 }
 
 static void lvgl_rounder_cb(lv_disp_drv_t * /*drv*/, lv_area_t *area) {
@@ -133,7 +174,7 @@ void display_init() {
     disp_drv.flush_cb     = lvgl_flush_cb;
     disp_drv.rounder_cb   = lvgl_rounder_cb;
     disp_drv.draw_buf     = &draw_buf;
-    disp_drv.full_refresh  = 1;
+    disp_drv.full_refresh  = 0;    // partial refresh — only redraw dirty areas
     lv_disp_drv_register(&disp_drv);
 
     // Touch driver
