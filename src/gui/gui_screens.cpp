@@ -5,6 +5,7 @@
  */
 #include "gui_internal.h"
 #include "sensor_module/sensor_module.h"
+#include "power.h"
 
 // ════════════════════════════════════════════════════════════════════
 //  Splash
@@ -670,14 +671,21 @@ void populate_test_detail() {
         }
         break;
     case 5: {
-        char buf[160];
+        PowerInfo pi = power_get_info();
+        char buf[280];
         snprintf(buf, sizeof(buf),
             "Battery Test\n\n"
             LV_SYMBOL_BATTERY_FULL " %d%%\n"
-            "Voltage: %.2fV\n\n"
-            "Status: %s",
-            bat_pct_cache, bat_voltage_v,
-            bat_pct_cache > 20 ? "OK" : "LOW");
+            "Battery:  %d mV\n"
+            "System:   %d mV\n"
+            "Input:    %d mV\n"
+            "Current:  %d mA\n\n"
+            "Status: %s\n"
+            "Bus:    %s",
+            pi.battery_pct,
+            pi.battery_mv, pi.system_mv,
+            pi.input_mv, pi.charge_ma,
+            pi.charge_status, pi.bus_status);
         lv_label_set_text(lbl_test_detail, buf);
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;

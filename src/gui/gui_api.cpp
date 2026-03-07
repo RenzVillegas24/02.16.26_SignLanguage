@@ -287,14 +287,42 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         }
         break;
     case 5: {
-        char vbuf[120];
+        // Comprehensive SY6970 battery info (updated every 100ms)
+        PowerInfo pi = power_get_info();
+        const char *bicon;
+        if      (pi.battery_pct > 80) bicon = LV_SYMBOL_BATTERY_FULL;
+        else if (pi.battery_pct > 50) bicon = LV_SYMBOL_BATTERY_3;
+        else if (pi.battery_pct > 25) bicon = LV_SYMBOL_BATTERY_2;
+        else if (pi.battery_pct > 10) bicon = LV_SYMBOL_BATTERY_1;
+        else                          bicon = LV_SYMBOL_BATTERY_EMPTY;
+        char vbuf[420];
         snprintf(vbuf, sizeof(vbuf),
             "Battery Test\n\n"
-            LV_SYMBOL_BATTERY_FULL " %d%%\n"
-            "Voltage: %.2fV\n\n"
-            "Status: %s",
-            bat_pct_cache, bat_voltage_v,
-            bat_pct_cache > 20 ? "OK" : "LOW");
+            "%s %d%%\n"
+            "Battery:  %d mV\n"
+            "System:   %d mV\n"
+            "Input:    %d mV\n"
+            "Current:  %d mA\n"
+            "NTC:      %.1f%%\n\n"
+            "Status:   %s\n"
+            "Bus:      %s\n"
+            "USB:      %s\n\n"
+            "Faults:\n"
+            "  Chg: %s\n"
+            "  Bat: %s\n"
+            "  NTC: %s",
+            bicon, pi.battery_pct,
+            pi.battery_mv,
+            pi.system_mv,
+            pi.input_mv,
+            pi.charge_ma,
+            pi.ntc_pct,
+            pi.charge_status,
+            pi.bus_status,
+            pi.bus_connection,
+            pi.charging_fault,
+            pi.battery_fault,
+            pi.ntc_fault);
         lv_label_set_text(lbl_test_detail, vbuf);
         break;
     }
@@ -340,27 +368,6 @@ void gui_set_battery(int pct) {
     snprintf(buf, sizeof(buf), "%s %d%%", icon, pct);
     if (bat_label)
         lv_label_set_text(bat_label, buf);
-
-    if (cur_gui_mode == MODE_TEST && test_active == 5 && lbl_test_detail) {
-        int input_mv  = power_input_voltage_mv();
-        int charge_ma = power_charging_current_ma();
-        char vbuf[200];
-        snprintf(vbuf, sizeof(vbuf),
-            "Battery Test\n\n"
-            "%s %d%%\n"
-            "Voltage: %.3f V\n"
-            "Input:   %d mV\n"
-            "Current: %d mA\n\n"
-            "Charging: %s\n"
-            "Status: %s",
-            icon, pct,
-            bat_voltage_v,
-            input_mv,
-            charge_ma,
-            (power_is_charging() || power_usb_connected()) ? "Yes" : "No",
-            power_charging_status_str());
-        lv_label_set_text(lbl_test_detail, vbuf);
-    }
 }
 
 void gui_set_charging(bool charging) {
