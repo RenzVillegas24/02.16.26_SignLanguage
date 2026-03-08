@@ -121,6 +121,7 @@ extern lv_obj_t *lbl_slp_val;
 extern lv_obj_t *sw_dark_mode;
 extern lv_obj_t *dd_fps;
 extern lv_obj_t *dd_accent;
+extern lv_obj_t *dd_local_voice;
 
 extern lv_obj_t *lbl_about;
 extern lv_obj_t *lbl_train_stat;
@@ -224,6 +225,7 @@ extern uint8_t  cfg_fps;
 extern bool     cfg_local_sensors;
 extern bool     cfg_local_words;
 extern bool     cfg_local_speech;
+extern uint8_t  cfg_local_voice;   // 0 = Boy, 1 = Girl
 extern bool     cfg_back_gesture;
 extern bool     cfg_lock_screen_on;  // always-on lock screen for Train/Predict
 
@@ -349,6 +351,7 @@ void cb_accent_dropdown(lv_event_t *e);
 void cb_local_sensors(lv_event_t *e);
 void cb_local_words(lv_event_t *e);
 void cb_local_speech(lv_event_t *e);
+void cb_local_voice(lv_event_t *e);
 void cb_back_gesture_switch(lv_event_t *e);
 void cb_lock_screen_switch(lv_event_t *e);
 

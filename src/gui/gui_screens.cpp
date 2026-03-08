@@ -246,6 +246,8 @@ void build_local() {
     mk_section(cont, "OPTIONS");
     add_switch_row(cont, LV_SYMBOL_LIST,       "Show Sensors",  cfg_local_sensors, cb_local_sensors);
     add_switch_row(cont, LV_SYMBOL_VOLUME_MAX, "Use Speech",    cfg_local_speech,  cb_local_speech);
+    dd_local_voice = add_dropdown_row(cont, LV_SYMBOL_AUDIO, "Voice",
+                                      "Boy\nGirl", cfg_local_voice, cb_local_voice);
 
     // ── Sensor bars container (toggled by "Show Sensors" switch) ──
     // Mirrors the Train screen: compact bidirectional % bars with colour coding.

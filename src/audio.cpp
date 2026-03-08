@@ -54,7 +54,7 @@ static audio_poll_fn s_poll_fn   = nullptr; // optional per-chunk interrupt/paus
 //  Instead we post the file path to a queue and let a dedicated
 //  FreeRTOS task (Core 0, 16 KB stack) handle all decoding.
 // ─────────────────────────────────────────────
-#define AUDIO_TASK_STACK   (16 * 1024)
+#define AUDIO_TASK_STACK   (48 * 1024)
 #define AUDIO_PATH_MAX     128
 
 static QueueHandle_t   s_audio_queue  = nullptr;
@@ -499,23 +499,27 @@ static bool audio_play_mp3_blocking(const char* filepath) {
     const size_t file_size = file.size();
     Serial.printf("[AUDIO] MP3  %s  (%u bytes)\n", filepath, (unsigned)file_size);
 
-    // ── Allocate buffers ──
-    uint8_t* inbuf = (uint8_t*)malloc(MP3_INBUF_SIZE);
+    // ── Allocate buffers (all on heap to keep task stack lean) ──
+    uint8_t*   inbuf = (uint8_t*)malloc(MP3_INBUF_SIZE);
     // MINIMP3_MAX_SAMPLES_PER_FRAME = 1152*2 (stereo)
-    int16_t* pcm   = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
-    int16_t* mono   = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
-    if (!inbuf || !pcm || !mono) {
+    int16_t*   pcm   = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
+    int16_t*   mono  = (int16_t*)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t));
+    // mp3dec_t holds MDCT overlap + QMF state (~7 KB) — keep off the task stack
+    mp3dec_t*  dec   = (mp3dec_t*)malloc(sizeof(mp3dec_t));
+    if (!inbuf || !pcm || !mono || !dec) {
         Serial.println("[AUDIO] MP3 malloc failed");
         if (inbuf) free(inbuf);
         if (pcm)   free(pcm);
-        if (mono)   free(mono);
+        if (mono)  free(mono);
+        if (dec)   free(dec);
         file.close();
+        LittleFS.end();
+        s_playing = false;
         return false;
     }
 
     // ── Initialise decoder ──
-    mp3dec_t dec;
-    mp3dec_init(&dec);
+    mp3dec_init(dec);
 
     s_playing = true;
     unsigned long t0     = millis();
@@ -550,7 +554,7 @@ static bool audio_play_mp3_blocking(const char* filepath) {
 
         // ── Decode one frame ──
         mp3dec_frame_info_t info;
-        int samples = mp3dec_decode_frame(&dec, inbuf + buf_offset,
+        int samples = mp3dec_decode_frame(dec, inbuf + buf_offset,
                                           buf_bytes, pcm, &info);
 
         if (info.frame_bytes == 0) {
@@ -612,6 +616,7 @@ static bool audio_play_mp3_blocking(const char* filepath) {
     free(inbuf);
     free(pcm);
     free(mono);
+    free(dec);
     file.close();
     LittleFS.end();
 

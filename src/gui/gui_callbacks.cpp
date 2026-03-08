@@ -117,6 +117,12 @@ void cb_local_speech(lv_event_t *e) {
     cfg_local_speech = lv_obj_has_state(sw, LV_STATE_CHECKED);
 }
 
+void cb_local_voice(lv_event_t *e) {
+    lv_obj_t *dd = lv_event_get_target(e);
+    cfg_local_voice = (uint8_t)lv_dropdown_get_selected(dd);
+    Serial.printf("[GUI] Voice → %s\n", cfg_local_voice == 0 ? "Boy" : "Girl");
+}
+
 void cb_back_gesture_switch(lv_event_t *e) {
     lv_obj_t *sw = lv_event_get_target(e);
     cfg_back_gesture = lv_obj_has_state(sw, LV_STATE_CHECKED);

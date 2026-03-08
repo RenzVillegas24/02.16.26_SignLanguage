@@ -198,6 +198,10 @@ static void train_serial_output() {
 // ════════════════════════════════════════════════════════════════════
 static void classify_gesture() {
     if (!sensor_module_ei_ready()) return;
+    // Don't overwrite the displayed label while audio is speaking it —
+    // the EI window keeps sliding and would switch gesture_text mid-playback,
+    // either triggering a double-play or skipping the current word entirely.
+    if (audio_is_playing()) return;
     const char *label = sensor_module_predict(processed_data);
     strncpy(gesture_text, label, sizeof(gesture_text));
 }
@@ -480,15 +484,17 @@ void loop() {
             if (strcmp(gesture_text, "---") != 0 &&
                 strcmp(gesture_text, "ERROR") != 0 &&
                 strcmp(gesture_text, last_spoken_label) != 0) {
-                // Build the audio file path: /boy/<label>.mp3
+                // Build the audio file path: /<voice>/<label>.mp3
                 char audio_path[64];
-                snprintf(audio_path, sizeof(audio_path), "/boy/%s.mp3", gesture_text);
+                snprintf(audio_path, sizeof(audio_path), "/%s/%s.mp3",
+                         gui_local_voice_dir(), gesture_text);
                 audio_play_mp3(audio_path);
                 strncpy(last_spoken_label, gesture_text, sizeof(last_spoken_label));
                 Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
             }
-            // Reset spoken label tracking when gesture goes back to idle
-            if (strcmp(gesture_text, "---") == 0) {
+            // Only reset the spoken-label guard once audio has finished and
+            // the gesture has gone back to idle — avoids immediate re-trigger.
+            if (strcmp(gesture_text, "---") == 0 && !audio_is_playing()) {
                 last_spoken_label[0] = '\0';
             }
         }

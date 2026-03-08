@@ -45,6 +45,7 @@ lv_obj_t *lbl_slp_val      = nullptr;
 lv_obj_t *sw_dark_mode     = nullptr;
 lv_obj_t *dd_fps           = nullptr;
 lv_obj_t *dd_accent        = nullptr;
+lv_obj_t *dd_local_voice   = nullptr;
 
 lv_obj_t *lbl_about        = nullptr;
 lv_obj_t *lbl_train_stat   = nullptr;
@@ -138,9 +139,10 @@ bool     cfg_dark_mode  = true;
 uint8_t  cfg_fps        = 30;
 uint8_t  cfg_accent     = 0;        // accent colour index (0..NUM_ACCENTS-1)
 
-bool     cfg_local_sensors = false;
+bool     cfg_local_sensors = true;
 bool     cfg_local_words   = true;
-bool     cfg_local_speech  = false;
+bool     cfg_local_speech  = true;
+uint8_t  cfg_local_voice   = 0;   // 0 = Boy, 1 = Girl
 bool     cfg_back_gesture  = true;
 bool     cfg_lock_screen_on = true;  // always-on lock screen for Train/Predict modes
 
@@ -561,6 +563,7 @@ bool    gui_get_lock_screen_on()      { return cfg_lock_screen_on; }
 bool gui_local_show_sensors()         { return cfg_local_sensors; }
 bool gui_local_show_words()           { return cfg_local_words; }
 bool gui_local_use_speech()           { return cfg_local_speech; }
+const char *gui_local_voice_dir()     { return cfg_local_voice == 0 ? "boy" : "girl"; }
 
 void gui_set_cpu_usage(int pct) {
     char buf[16];

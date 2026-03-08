@@ -45,6 +45,7 @@ bool    gui_get_lock_screen_on();         // true → lock screen instead of sle
 bool gui_local_show_sensors();
 bool gui_local_show_words();
 bool gui_local_use_speech();
+const char *gui_local_voice_dir();   // returns "boy" or "girl"
 
 // About / system info — update live data on the about panel
 void gui_update_about(const SystemInfoData &info);
