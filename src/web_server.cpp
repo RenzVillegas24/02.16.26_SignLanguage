@@ -201,14 +201,12 @@ void web_server_update(const SensorData &d, const char *gesture) {
         "{\"g\":\"%s\","
         "\"f\":[%u,%u,%u,%u,%u],"
         "\"h\":[%u,%u,%u,%u,%u],"
-        "\"ht\":[%u,%u,%u,%u,%u],"
         "\"p\":%.1f,\"r\":%.1f,"
         "\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
         "\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f}",
         gesture ? gesture : "---",
         d.flex[0], d.flex[1], d.flex[2], d.flex[3], d.flex[4],
         d.hall[0], d.hall[1], d.hall[2], d.hall[3], d.hall[4],
-        d.hall_top[0], d.hall_top[1], d.hall_top[2], d.hall_top[3], d.hall_top[4],
         d.pitch, d.roll,
         d.accel_x, d.accel_y, d.accel_z,
         d.gyro_x,  d.gyro_y,  d.gyro_z);

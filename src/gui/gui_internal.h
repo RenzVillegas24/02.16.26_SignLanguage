@@ -107,7 +107,6 @@ extern lv_obj_t *scr_test_detail;
 extern lv_obj_t *lbl_gesture;
 extern lv_obj_t *bar_flex[5];
 extern lv_obj_t *bar_hall[5];
-extern lv_obj_t *bar_hall_top[5];
 extern lv_obj_t *bars_container;
 
 extern lv_obj_t *slider_brightness;
@@ -139,7 +138,7 @@ extern lv_obj_t *slider_test_brt;
 extern lv_obj_t *lbl_test_brt_val;
 extern lv_obj_t *btn_benchmark;
 
-// Sensor test detail bars + labels (for Flex/Hall/Hall Top screens)
+// Sensor test detail bars + labels (for Flex/Hall screens)
 extern lv_obj_t *sensor_test_container;
 extern lv_obj_t *sensor_test_bars[5];
 extern lv_obj_t *sensor_test_lbls[5];
@@ -155,7 +154,7 @@ extern lv_obj_t *calib_phase_lbl;     // Phase title label (e.g. "Step 1/3")
 extern lv_obj_t *lbl_calib_info;   // Calibration status footer in sensors menu
 extern lv_obj_t *btn_calibrate;    // Calibrate button in sensors menu
 
-// Speaker test panel widgets (shown in test_detail for case 6)
+// Speaker test panel widgets (shown in test_detail for case 5)
 extern lv_obj_t *spk_panel;        // Container — hidden except for speaker test
 extern lv_obj_t *lbl_spk_step;     // "Test 3/9: Volume Fade"
 extern lv_obj_t *spk_prog_bar;     // 0-9 overall progress
@@ -256,7 +255,7 @@ int       mk_header(lv_obj_t *scr,
                      lv_obj_t **title_out = nullptr);
 lv_obj_t *mk_content(lv_obj_t *scr, int header_h);
 void      create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
-                      lv_obj_t *hall_top[], int y_start);
+                      int y_start);
 
 lv_obj_t *add_slider_row(lv_obj_t *par, const char *icon,
                          const char *label, int32_t min_v, int32_t max_v,
@@ -341,7 +340,6 @@ void cb_test_mpu(lv_event_t *e);
 void cb_test_sensors(lv_event_t *e);
 void cb_test_flex(lv_event_t *e);
 void cb_test_hall(lv_event_t *e);
-void cb_test_hall_top(lv_event_t *e);
 void cb_test_battery(lv_event_t *e);
 void cb_test_speaker(lv_event_t *e);
 void cb_btn_back_test_sensors(lv_event_t *e);

@@ -32,17 +32,23 @@
 #define MUX_CH_HALL_RING    11
 #define MUX_CH_HALL_PINKY   12
 
-// Hall-effect sensors on TOP of each finger (yet to be calibrated)
+/*
+Hall-effect sensors on TOP of each finger (No longer used)
 #define MUX_CH_HALL_TOP_THUMB   3
 #define MUX_CH_HALL_TOP_INDEX   4
 #define MUX_CH_HALL_TOP_MIDDLE  5
 #define MUX_CH_HALL_TOP_RING    13
 #define MUX_CH_HALL_TOP_PINKY   14
+*/
 
 #define NUM_FLEX_SENSORS      5
 #define NUM_HALL_SENSORS      5
-#define NUM_HALL_TOP_SENSORS  5
-#define NUM_SENSOR_CHANNELS   15
+/*
+Hall-effect sensors on TOP of each finger (No Longer Used)
+#define NUM_HALL_SIDE_SENSORS 5
+*/
+#define NUM_SENSOR_CHANNELS   10
+
 
 // ─────────────────────────────────────────────
 //  I2S Audio (MAX98357A)
@@ -59,8 +65,14 @@
 
 // Battery voltage conversion (voltage divider on board)
 #define BAT_ADC_FACTOR  2.0f    // Voltage divider ratio
-#define BAT_FULL_V      4.2f
+#define BAT_FULL_V      4.144f
 #define BAT_EMPTY_V     3.3f
+// Battery internal resistance estimate (mΩ).
+// Used to compensate the terminal-voltage rise while charging:
+//   OCV ≈ VBAT_measured − (I_charge × R_internal)
+// Increase if battery still reads too high when first plugged in;
+// decrease if the percentage drops too much under heavy load.
+#define BAT_INT_R_MOHM  150
 
 // ─────────────────────────────────────────────
 //  MPU6050 IMU (shares I2C bus with FT3168)
@@ -92,7 +104,6 @@ enum AppMode {
 struct SensorData {
     uint16_t flex[NUM_FLEX_SENSORS];         // Raw ADC (0-32767 via ADS1115, 0-4095 fallback)
     uint16_t hall[NUM_HALL_SENSORS];         // Raw ADC (side of finger)
-    uint16_t hall_top[NUM_HALL_TOP_SENSORS]; // Raw ADC (top of finger)
     float    accel_x, accel_y, accel_z;      // m/s²
     float    gyro_x,  gyro_y,  gyro_z;      // rad/s
     float    pitch, roll;                    // Degrees
@@ -113,4 +124,4 @@ struct SensorData {
 //  Edge Impulse Configuration
 // ─────────────────────────────────────────────
 #define EI_SERIAL_BAUD          115200
-#define EI_NUM_FEATURES         21  // 5 flex + 5 hall + 5 hall_top + 3 accel + 3 gyro
+#define EI_NUM_FEATURES         18  // 5 flex + 5 hall + 3 accel + 3 gyro + pitch + roll

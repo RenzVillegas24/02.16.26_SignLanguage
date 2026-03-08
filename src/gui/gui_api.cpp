@@ -31,7 +31,6 @@ lv_obj_t *lbl_gesture      = nullptr;
 
 lv_obj_t *bar_flex[5]      = {};
 lv_obj_t *bar_hall[5]      = {};
-lv_obj_t *bar_hall_top[5]  = {};
 lv_obj_t *bars_container   = nullptr;
 
 lv_obj_t *slider_brightness= nullptr;
@@ -139,7 +138,6 @@ const char *test_names[] = {
     "MPU6050",
     "Flex Sensor",
     "Hall Effect",
-    "Hall Top",
     "Battery",
     "Speaker"
 };
@@ -244,7 +242,6 @@ void gui_update(const SensorData &d) {
         for (int i = 0; i < 5; i++) {
             lv_bar_set_value(bar_flex[i], d.flex[i], LV_ANIM_OFF);
             lv_bar_set_value(bar_hall[i], d.hall[i], LV_ANIM_OFF);
-            lv_bar_set_value(bar_hall_top[i], d.hall_top[i], LV_ANIM_OFF);
         }
     }
 }
@@ -284,17 +281,7 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
             }
         }
         break;
-    case 4:
-        // Hall effect top test — update bars + labels (including RAW)
-        if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
-            for (int i = 0; i < 5; i++) {
-                lv_bar_set_value(sensor_test_bars[i], pd.hall_top_pct[i], LV_ANIM_OFF);
-                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: %+d%% (R:%d)",
-                                      i + 1, pd.hall_top_pct[i], pd.hall_top_raw[i]);
-            }
-        }
-        break;
-    case 5: {
+    case 4: {
         // Comprehensive SY6970 battery info (updated every 100ms)
         PowerInfo pi = power_get_info();
         const char *bicon;
@@ -303,7 +290,7 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         else if (pi.battery_pct > 25) bicon = LV_SYMBOL_BATTERY_2;
         else if (pi.battery_pct > 10) bicon = LV_SYMBOL_BATTERY_1;
         else                          bicon = LV_SYMBOL_BATTERY_EMPTY;
-        char vbuf[420];
+        char vbuf[480];
         snprintf(vbuf, sizeof(vbuf),
             "Battery Test\n\n"
             "%s %d%%\n"
@@ -315,6 +302,8 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
             "Status:   %s\n"
             "Bus:      %s\n"
             "USB:      %s\n\n"
+            "ADC raw:  %d\n"
+            "ADC volt: %d mV\n\n"
             "Faults:\n"
             "  Chg: %s\n"
             "  Bat: %s\n"
@@ -328,13 +317,14 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
             pi.charge_status,
             pi.bus_status,
             pi.bus_connection,
+            pi.adc_raw, pi.adc_mv,
             pi.charging_fault,
             pi.battery_fault,
             pi.ntc_fault);
         lv_label_set_text(lbl_test_detail, vbuf);
         break;
     }
-    case 6:
+    case 5:
         // Speaker test UI is updated via the poll timer in gui_callbacks.cpp
         // gui_test_update is called from the loop — just refresh the panel here
         refresh_spk_panel();
@@ -343,14 +333,6 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         break;
     }
 
-    // Dump sensor data to Serial only for sensor/IMU tests
-    if (test_active >= 1 && test_active <= 4) {
-        static uint32_t last_serial = 0;
-        if (millis() - last_serial >= 500) {
-            last_serial = millis();
-            sensor_module_print_serial(pd);
-        }
-    }
 }
 
 void gui_set_gesture(const char *text) {
@@ -679,10 +661,8 @@ void refresh_calib_info_label() {
     // Fetch actual calibration data
     FlexCalibInfo fc[NUM_FLEX_SENSORS];
     HallCalibInfo hc[NUM_HALL_SENSORS];
-    HallCalibInfo htc[NUM_HALL_TOP_SENSORS];
     sensor_module_get_flex_cal(fc);
     sensor_module_get_hall_cal(hc);
-    sensor_module_get_hall_top_cal(htc);
 
     static const char *fn[] = {"Th","Ix","Mi","Ri","Pi"};
     char buf[480];
@@ -705,14 +685,6 @@ void refresh_calib_info_label() {
                         " %s: %d / +%d / -%d\n",
                         fn[i], hc[i].normal,
                         hc[i].front_range, hc[i].back_range);
-    }
-
-    off += snprintf(buf + off, sizeof(buf) - off, "\nHall Top (norm / +front / -back):\n");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        off += snprintf(buf + off, sizeof(buf) - off,
-                        " %s: %d / +%d / -%d\n",
-                        fn[i], htc[i].normal,
-                        htc[i].front_range, htc[i].back_range);
     }
 
     lv_label_set_text(lbl_calib_info, buf);

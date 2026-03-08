@@ -145,11 +145,6 @@ static void sensor_task_fn(void *) {
         MUX_CH_FLEX_THUMB,  MUX_CH_FLEX_INDEX,  MUX_CH_FLEX_MIDDLE,
         MUX_CH_FLEX_RING,   MUX_CH_FLEX_PINKY
     };
-    static const uint8_t ht_ch[NUM_HALL_TOP_SENSORS] = {
-        MUX_CH_HALL_TOP_THUMB,  MUX_CH_HALL_TOP_INDEX,
-        MUX_CH_HALL_TOP_MIDDLE, MUX_CH_HALL_TOP_RING,
-        MUX_CH_HALL_TOP_PINKY
-    };
 
     for (;;) {
         if (!s_active) {
@@ -158,6 +153,13 @@ static void sensor_task_fn(void *) {
         }
 
         SensorData d = {};
+
+        // ── Dummy MUX_0 read — settles ADC after channel gap between cycles ──
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+            mux_select(0);
+            ads_or_adc_read();   // throwaway read
+            xSemaphoreGive(i2c_mutex);
+        }
 
         // ── Flex sensors (5 channels, ~6 ms with ADS1115) ──
         if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
@@ -174,16 +176,6 @@ static void sensor_task_fn(void *) {
             for (int i = 0; i < NUM_HALL_SENSORS; i++) {
                 mux_select(MUX_CH_HALL_THUMB + i);
                 d.hall[i] = ads_or_adc_read();
-            }
-            xSemaphoreGive(i2c_mutex);
-        }
-        vTaskDelay(pdMS_TO_TICKS(2));
-
-        // ── Hall sensors — top (5 channels) ──
-        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
-            for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-                mux_select(ht_ch[i]);
-                d.hall_top[i] = ads_or_adc_read();
             }
             xSemaphoreGive(i2c_mutex);
         }

@@ -57,28 +57,6 @@ void test_sensors_format_hall(const ProcessedSensorData &pd,
         off += snprintf(buf + off, len - off, "\n(Not calibrated)");
 }
 
-void test_sensors_format_hall_top(const ProcessedSensorData &pd,
-                                  char *buf, size_t len) {
-    int off = 0;
-    off += snprintf(buf + off, len - off, "Hall Effect (top)\n\n");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        const char *state;
-        if (pd.hall_top_pct[i] > 5)
-            state = "Front";
-        else if (pd.hall_top_pct[i] < -5)
-            state = "Back";
-        else
-            state = "Normal";
-
-        off += snprintf(buf + off, len - off,
-                        "%-6s: %4d  %+4d%% %s\n",
-                        finger_names[i], pd.hall_top_raw[i],
-                        (int)pd.hall_top_pct[i], state);
-    }
-    off += snprintf(buf + off, len - off,
-                    "\n(Placeholder calibration)");
-}
-
 void test_sensors_format_mpu(const ProcessedSensorData &pd,
                              char *buf, size_t len) {
     snprintf(buf, len,

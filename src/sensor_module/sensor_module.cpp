@@ -61,11 +61,6 @@ static const uint8_t hall_channels[NUM_HALL_SENSORS] = {
     MUX_CH_HALL_RING,   MUX_CH_HALL_PINKY
 };
 
-static const uint8_t hall_top_channels[NUM_HALL_TOP_SENSORS] = {
-    MUX_CH_HALL_TOP_THUMB,  MUX_CH_HALL_TOP_INDEX, MUX_CH_HALL_TOP_MIDDLE,
-    MUX_CH_HALL_TOP_RING,   MUX_CH_HALL_TOP_PINKY
-};
-
 static const char *finger_names[5] = {
     "Thumb", "Index", "Middle", "Ring", "Pinky"
 };
@@ -110,18 +105,6 @@ static HallCalibration hall_cal[NUM_HALL_SENSORS] = {
 };
 
 // ─────────────────────────────────────────────
-//  Hall TOP calibration (yet to be characterised)
-//  Placeholder: range ≈ 1150 front, 400 back
-// ─────────────────────────────────────────────
-static HallCalibration hall_top_cal[NUM_HALL_TOP_SENSORS] = {
-    {0, 1150, 400, false},   // Thumb  (CH 3)
-    {0, 1150, 400, false},   // Index  (CH 4)
-    {0, 1150, 400, false},   // Middle (CH 5)
-    {0, 1150, 400, false},   // Ring   (CH 13)
-    {0, 1150, 400, false},   // Pinky  (CH 14)
-};
-
-// ─────────────────────────────────────────────
 //  Smoothing state
 // ─────────────────────────────────────────────
 
@@ -134,15 +117,12 @@ struct MedianFilter {
 
 static MedianFilter flex_mf[NUM_FLEX_SENSORS];
 static MedianFilter hall_mf[NUM_HALL_SENSORS];
-static MedianFilter hall_top_mf[NUM_HALL_TOP_SENSORS];
 
 // ── Adaptive EMA state (single float per channel) ──
 static float    flex_ema[NUM_FLEX_SENSORS];
 static float    hall_ema[NUM_HALL_SENSORS];
-static float    hall_top_ema[NUM_HALL_TOP_SENSORS];
 static bool     flex_ema_init     = false;
 static bool     hall_ema_init     = false;
-static bool     hall_top_ema_init = false;
 
 static bool     s_calibrated = false;
 
@@ -287,37 +267,14 @@ static int8_t calc_hall_side_pct(int idx, uint16_t raw) {
     return 0;
 }
 
-/// Hall (top): median(3) → adaptive EMA → linear map
-static int8_t calc_hall_top_pct(int idx, uint16_t raw) {
-    if (!hall_top_cal[idx].calibrated) return 0;
-
-    uint16_t denoised = median_push(hall_top_mf[idx], raw);
-    float smoothed_f  = adaptive_ema(hall_top_ema[idx], (float)denoised,
-                                     HALL_ALPHA_MIN, HALL_ALPHA_MAX, HALL_BETA,
-                                     hall_top_ema_init);
-    int16_t diff = (int16_t)(smoothed_f + 0.5f) - (int16_t)hall_top_cal[idx].normal;
-
-    if (diff > 0) {
-        if (hall_top_cal[idx].front_range == 0) return 0;
-        return (int8_t)constrain((diff * 100) / (int16_t)hall_top_cal[idx].front_range, 0, 100);
-    } else if (diff < 0) {
-        if (hall_top_cal[idx].back_range == 0) return 0;
-        return (int8_t)constrain((diff * 100) / (int16_t)hall_top_cal[idx].back_range, -100, 0);
-    }
-    return 0;
-}
-
 /// Helper: zero all smoothing state for a fresh start.
 static void reset_smoothing_state() {
     memset(flex_mf,          0, sizeof(flex_mf));
     memset(hall_mf,          0, sizeof(hall_mf));
-    memset(hall_top_mf,      0, sizeof(hall_top_mf));
     memset(flex_ema,         0, sizeof(flex_ema));
     memset(hall_ema,         0, sizeof(hall_ema));
-    memset(hall_top_ema,     0, sizeof(hall_top_ema));
     flex_ema_init     = false;
     hall_ema_init     = false;
-    hall_top_ema_init = false;
 }
 
 // ─────────────────────────────────────────────
@@ -331,8 +288,6 @@ void sensor_module_init() {
         flex_cal[i].calibrated = false;
     for (int i = 0; i < NUM_HALL_SENSORS; i++)
         hall_cal[i].calibrated = false;
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-        hall_top_cal[i].calibrated = false;
 
     // Try to restore calibration from NVS
     if (sensor_module_load_calibration()) {
@@ -353,7 +308,6 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
     Serial.println("╚════════════════════════════════════════╝");
 
     uint32_t hall_acc[NUM_HALL_SENSORS]          = {0};
-    uint32_t hall_top_acc[NUM_HALL_TOP_SENSORS]  = {0};
 
     // Per-sample buffers for flex stddev (capped at MAX_CAL_SAMPLES)
     uint16_t flex_samples[NUM_FLEX_SENSORS][MAX_CAL_SAMPLES];
@@ -369,8 +323,6 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
         }
         for (int i = 0; i < NUM_HALL_SENSORS; i++)
             hall_acc[i] += mux_read_oversampled(hall_channels[i]);
-        for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-            hall_top_acc[i] += mux_read_oversampled(hall_top_channels[i]);
 
         n++;
 
@@ -409,12 +361,6 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
     }
     hall_ema_init = true;
 
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        hall_top_cal[i].normal     = hall_top_acc[i] / n;
-        hall_top_cal[i].calibrated = true;
-        hall_top_ema[i] = (float)hall_top_cal[i].normal;
-    }
-    hall_top_ema_init = true;
     s_calibrated = true;
 
     // Persist to NVS
@@ -435,44 +381,35 @@ void sensor_module_calibrate(SensorCalibProgressCb progress_cb) {
                       finger_names[i], hall_cal[i].normal,
                       hall_cal[i].front_range, hall_cal[i].back_range);
     }
-    Serial.println("─── Hall (top) ──────────────────────────");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        Serial.printf("  %-6s  Normal = %4d  (Front: +%d, Back: -%d)\n",
-                      finger_names[i], hall_top_cal[i].normal,
-                      hall_top_cal[i].front_range, hall_top_cal[i].back_range);
-    }
     Serial.println("─────────────────────────────────────────\n");
 }
 
 // ─────────────────────────────────────────────
-//  Multi-phase calibration (NEW)
+//  Multi-phase calibration
 // ─────────────────────────────────────────────
 //
 //  Phase 0 — FLAT HAND (fingers extended):
 //    • Flex: set flat_value + noise deadzone
 //    • Hall (side/knuckle): magnets CLOSEST → record close_avg
-//    • Hall (top/fingertip): magnets FARTHEST → record far_avg
 //
 //  Phase 1 — CLOSED FIST, THUMBS ON TOP (punching):
-//    • Flex: max-bent → compute upward/downward range
-//    • Hall (side): magnets FARTHEST → record far_avg
-//    • Hall (top) Index..Pinky: magnets CLOSEST → record close_avg
+//    • Flex Index..Pinky: max-bent → compute range
+//    • Hall (side) Index..Pinky: magnets FARTHEST → record far_avg
+//    (Thumb excluded — not properly bent in this pose)
 //
 //  Phase 2 — CLOSED FIST, THUMBS TUCKED INSIDE:
-//    • Hall (top) Thumb only: magnets CLOSEST → record close_avg
+//    • Flex Thumb: max-bent → compute range
+//    • Hall (side) Thumb: magnets FARTHEST → record far_avg
 //
 //  Finalize: compute ranges from sampled extremes.
 
 // Per-phase raw averages (populated by calibrate_phase, consumed by finalize)
 static uint16_t phase_flex_flat[NUM_FLEX_SENSORS];       // Phase 0
-static uint16_t phase_flex_fist[NUM_FLEX_SENSORS];       // Phase 1
+static uint16_t phase_flex_fist[NUM_FLEX_SENSORS];       // Phase 1 (idx..pky), Phase 2 (thumb)
 static uint16_t phase_flex_dz[NUM_FLEX_SENSORS];         // Phase 0 noise deadzone
 
 static uint16_t phase_hall_close[NUM_HALL_SENSORS];      // Phase 0 (flat = close)
-static uint16_t phase_hall_far[NUM_HALL_SENSORS];         // Phase 1 (fist = far)
-
-static uint16_t phase_hall_top_far[NUM_HALL_TOP_SENSORS]; // Phase 0 (flat = far)
-static uint16_t phase_hall_top_close[NUM_HALL_TOP_SENSORS]; // Phase 1 for Idx..Pky, Phase 2 for Thumb
+static uint16_t phase_hall_far[NUM_HALL_SENSORS];         // Phase 1 (idx..pky), Phase 2 (thumb)
 
 static bool phase_done[CALIB_PHASE_COUNT] = {false, false, false};
 
@@ -509,7 +446,6 @@ void sensor_module_calibrate_phase(CalibPhase phase,
 
     uint32_t flex_acc[NUM_FLEX_SENSORS]         = {0};
     uint32_t hall_acc[NUM_HALL_SENSORS]          = {0};
-    uint32_t hall_top_acc[NUM_HALL_TOP_SENSORS]  = {0};
 
     // For phase 0 flex deadzone: store samples for stddev
     uint16_t flex_samples[NUM_FLEX_SENSORS][MAX_CAL_SAMPLES];
@@ -520,6 +456,9 @@ void sensor_module_calibrate_phase(CalibPhase phase,
     uint16_t n  = 0;
 
     while (millis() - t0 < PHASE_SAMPLE_TIME_MS) {
+        // Dummy MUX_0 read to settle ADC before real readings
+        mux_read_oversampled(0);
+
         for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
             uint16_t v = mux_read_oversampled(flex_channels[i]);
             flex_acc[i] += v;
@@ -528,8 +467,6 @@ void sensor_module_calibrate_phase(CalibPhase phase,
         }
         for (int i = 0; i < NUM_HALL_SENSORS; i++)
             hall_acc[i] += mux_read_oversampled(hall_channels[i]);
-        for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-            hall_top_acc[i] += mux_read_oversampled(hall_top_channels[i]);
 
         n++;
 
@@ -564,27 +501,22 @@ void sensor_module_calibrate_phase(CalibPhase phase,
             // Hall (side): magnets closest → close value
             for (int i = 0; i < NUM_HALL_SENSORS; i++)
                 phase_hall_close[i] = (uint16_t)(hall_acc[i] / n);
-            // Hall (top): magnets farthest → far value
-            for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-                phase_hall_top_far[i] = (uint16_t)(hall_top_acc[i] / n);
             break;
         }
         case CALIB_PHASE_FIST_THUMB_UP: {
-            // Flex: fist bent values
-            for (int i = 0; i < NUM_FLEX_SENSORS; i++)
+            // Flex: fist bent values for Index..Pinky only (thumb not bent here)
+            for (int i = 1; i < NUM_FLEX_SENSORS; i++)  // skip i=0 (thumb)
                 phase_flex_fist[i] = (uint16_t)(flex_acc[i] / n);
-            // Hall (side): magnets farthest → far value
-            for (int i = 0; i < NUM_HALL_SENSORS; i++)
+            // Hall (side): magnets farthest → far value for Index..Pinky only
+            for (int i = 1; i < NUM_HALL_SENSORS; i++)  // skip i=0 (thumb)
                 phase_hall_far[i] = (uint16_t)(hall_acc[i] / n);
-            // Hall (top) Index..Pinky: magnets closest → close value
-            // (Thumb NOT set here — that's phase 2)
-            for (int i = 1; i < NUM_HALL_TOP_SENSORS; i++)  // skip i=0 (thumb)
-                phase_hall_top_close[i] = (uint16_t)(hall_top_acc[i] / n);
             break;
         }
         case CALIB_PHASE_FIST_THUMB_IN: {
-            // Hall (top) Thumb only: magnets closest → close value
-            phase_hall_top_close[0] = (uint16_t)(hall_top_acc[0] / n);
+            // Thumb flex fist value (thumb is properly bent here)
+            phase_flex_fist[0] = (uint16_t)(flex_acc[0] / n);
+            // Thumb hall far value (thumb magnet is farthest here)
+            phase_hall_far[0] = (uint16_t)(hall_acc[0] / n);
             break;
         }
         default: break;
@@ -657,31 +589,6 @@ bool sensor_module_calibrate_finalize() {
     }
     hall_ema_init = true;
 
-    // ── Hall (top/fingertip) ──
-    // far_val from phase 0 (flat), close_val from phase 1/2
-    // normal = midpoint, front_range = towards magnet, back_range = away
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        uint16_t close_v = phase_hall_top_close[i];
-        uint16_t far_v   = phase_hall_top_far[i];
-        uint16_t mid     = (close_v + far_v) / 2;
-
-        hall_top_cal[i].normal = mid;
-
-        if (close_v >= far_v) {
-            hall_top_cal[i].front_range = close_v - mid;
-            hall_top_cal[i].back_range  = mid - far_v;
-        } else {
-            hall_top_cal[i].front_range = mid - close_v;
-            hall_top_cal[i].back_range  = far_v - mid;
-        }
-        if (hall_top_cal[i].front_range == 0) hall_top_cal[i].front_range = 1;
-        if (hall_top_cal[i].back_range  == 0) hall_top_cal[i].back_range  = 1;
-
-        hall_top_cal[i].calibrated = true;
-        hall_top_ema[i] = (float)hall_top_cal[i].normal;
-    }
-    hall_top_ema_init = true;
-
     s_calibrated = true;
     reset_smoothing_state();
 
@@ -708,13 +615,6 @@ bool sensor_module_calibrate_finalize() {
                       hall_cal[i].normal,
                       hall_cal[i].front_range, hall_cal[i].back_range);
     }
-    Serial.println("─── Hall (top) ──────────────────────────");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        Serial.printf("  %-6s  Close=%4d  Far=%4d  -> Norm=%4d (+%d -%d)\n",
-                      finger_names[i], phase_hall_top_close[i], phase_hall_top_far[i],
-                      hall_top_cal[i].normal,
-                      hall_top_cal[i].front_range, hall_top_cal[i].back_range);
-    }
     Serial.println("─────────────────────────────────────────\n");
 
     // Reset phase flags for next calibration run
@@ -726,26 +626,19 @@ bool sensor_module_calibrate_finalize() {
 bool sensor_module_is_calibrated() { return s_calibrated; }
 
 void sensor_module_process(const SensorData &raw, ProcessedSensorData &out) {
-    // Flex — median → dual EMA → deadzone → % → slew
+    // Flex — median → adaptive EMA → deadzone → %
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
         out.flex_raw[i] = raw.flex[i];
         out.flex_pct[i] = calc_flex_pct(i, raw.flex[i]);
     }
     if (!flex_ema_init) flex_ema_init = true;   // first frame seeds done
 
-    // Hall side — median → dual EMA → % → slew
+    // Hall side — median → adaptive EMA → %
     for (int i = 0; i < NUM_HALL_SENSORS; i++) {
         out.hall_raw[i] = raw.hall[i];
         out.hall_pct[i] = calc_hall_side_pct(i, raw.hall[i]);
     }
     if (!hall_ema_init) hall_ema_init = true;
-
-    // Hall top — median → dual EMA → % → slew
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        out.hall_top_raw[i] = raw.hall_top[i];
-        out.hall_top_pct[i] = calc_hall_top_pct(i, raw.hall_top[i]);
-    }
-    if (!hall_top_ema_init) hall_top_ema_init = true;
 
     // IMU pass-through
     out.accel_x = raw.accel_x;  out.accel_y = raw.accel_y;  out.accel_z = raw.accel_z;
@@ -781,16 +674,6 @@ void sensor_module_print_serial(const ProcessedSensorData &pd) {
         else
             o += snprintf(buf + o, N - o, "● Normal\n");
     }
-    o += snprintf(buf + o, N - o, "─── Hall (top) [Back ◄──|──► Front] ────\n");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        o += snprintf(buf + o, N - o, "  %-6s: %4d  ", finger_names[i], pd.hall_top_raw[i]);
-        if (pd.hall_top_pct[i] > 5)
-            o += snprintf(buf + o, N - o, "▲ %3d%% Front\n", (int)pd.hall_top_pct[i]);
-        else if (pd.hall_top_pct[i] < -5)
-            o += snprintf(buf + o, N - o, "▼ %3d%% Back\n", (int)abs(pd.hall_top_pct[i]));
-        else
-            o += snprintf(buf + o, N - o, "● Normal\n");
-    }
     if (pd.accel_x != 0 || pd.accel_y != 0 || pd.accel_z != 0) {
         o += snprintf(buf + o, N - o, "─── MPU6050 IMU ────────────────────────\n");
         o += snprintf(buf + o, N - o, "  Accel:  X=%7.3f  Y=%7.3f  Z=%7.3f  m/s²\n",
@@ -807,8 +690,6 @@ void sensor_module_print_serial(const ProcessedSensorData &pd) {
         o += snprintf(buf + o, N - o, "F%d:%d,FP%d:%d,", i, pd.flex_raw[i], i, (int)pd.flex_pct[i]);
     for (int i = 0; i < NUM_HALL_SENSORS; i++)
         o += snprintf(buf + o, N - o, "H%d:%d,HP%d:%d,", i, pd.hall_raw[i], i, (int)pd.hall_pct[i]);
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-        o += snprintf(buf + o, N - o, "HT%d:%d,HTP%d:%d,", i, pd.hall_top_raw[i], i, (int)pd.hall_top_pct[i]);
     o += snprintf(buf + o, N - o, "AX:%.2f,AY:%.2f,AZ:%.2f,GX:%.2f,GY:%.2f,GZ:%.2f,P:%.1f,R:%.1f\n\n",
                   pd.accel_x, pd.accel_y, pd.accel_z,
                   pd.gyro_x, pd.gyro_y, pd.gyro_z,
@@ -827,9 +708,6 @@ void sensor_module_format_oled(const ProcessedSensorData &pd,
     off += snprintf(buf + off, buf_len - off, "\nHall: ");
     for (int i = 0; i < NUM_HALL_SENSORS; i++)
         off += snprintf(buf + off, buf_len - off, "%+4d ", (int)pd.hall_pct[i]);
-    off += snprintf(buf + off, buf_len - off, "\nHTop: ");
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++)
-        off += snprintf(buf + off, buf_len - off, "%+4d ", (int)pd.hall_top_pct[i]);
     off += snprintf(buf + off, buf_len - off,
                     "\nIMU P:%.0f R:%.0f",
                     pd.pitch, pd.roll);
@@ -838,7 +716,7 @@ void sensor_module_format_oled(const ProcessedSensorData &pd,
 const char *sensor_module_predict(ProcessedSensorData &pd) {
     // ── Edge Impulse stub ──────────────────────────
     // TODO: Replace with actual EI classifier inference.
-    //       1. Build feature array from pd (flex_pct, hall_pct, hall_top_pct, imu)
+    //       1. Build feature array from pd (flex_pct, hall_pct, imu)
     //       2. Call ei_run_classifier(...)
     //       3. Copy top label into pd.predicted_label
     //
@@ -889,13 +767,6 @@ void sensor_module_save_calibration() {
         snprintf(k, sizeof(k), "hf%d", i);  prefs.putUShort(k, hall_cal[i].front_range);
         snprintf(k, sizeof(k), "hb%d", i);  prefs.putUShort(k, hall_cal[i].back_range);
     }
-    // Hall top
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        char k[12];
-        snprintf(k, sizeof(k), "tn%d", i);  prefs.putUShort(k, hall_top_cal[i].normal);
-        snprintf(k, sizeof(k), "tf%d", i);  prefs.putUShort(k, hall_top_cal[i].front_range);
-        snprintf(k, sizeof(k), "tb%d", i);  prefs.putUShort(k, hall_top_cal[i].back_range);
-    }
     prefs.end();
     Serial.println("[SENSOR_MODULE] Calibration saved to NVS");
 }
@@ -930,17 +801,6 @@ bool sensor_module_load_calibration() {
         hall_ema[i] = (float)hall_cal[i].normal;
     }
     hall_ema_init = true;
-
-    // Hall top
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        char k[12];
-        snprintf(k, sizeof(k), "tn%d", i);  hall_top_cal[i].normal      = prefs.getUShort(k, 0);
-        snprintf(k, sizeof(k), "tf%d", i);  hall_top_cal[i].front_range = prefs.getUShort(k, 1150);
-        snprintf(k, sizeof(k), "tb%d", i);  hall_top_cal[i].back_range  = prefs.getUShort(k, 400);
-        hall_top_cal[i].calibrated = true;
-        hall_top_ema[i] = (float)hall_top_cal[i].normal;
-    }
-    hall_top_ema_init = true;
     prefs.end();
 
     s_calibrated = true;
@@ -964,13 +824,5 @@ void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]) {
         out[i].normal      = hall_cal[i].normal;
         out[i].front_range = hall_cal[i].front_range;
         out[i].back_range  = hall_cal[i].back_range;
-    }
-}
-
-void sensor_module_get_hall_top_cal(HallCalibInfo out[NUM_HALL_TOP_SENSORS]) {
-    for (int i = 0; i < NUM_HALL_TOP_SENSORS; i++) {
-        out[i].normal      = hall_top_cal[i].normal;
-        out[i].front_range = hall_top_cal[i].front_range;
-        out[i].back_range  = hall_top_cal[i].back_range;
     }
 }

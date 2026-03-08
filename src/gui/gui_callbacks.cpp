@@ -50,8 +50,8 @@ void cb_btn_back_predict(lv_event_t *e) { (void)e; nav_to(scr_predict, false);  
 void cb_btn_back_tests(lv_event_t *e)   { (void)e; nav_to(scr_settings, false); cur_gui_mode=MODE_SETTINGS; fire_mode(MODE_SETTINGS); test_active=-1; }
 void cb_btn_back_test_detail(lv_event_t *e) {
     (void)e;
-    // MPU and all sensor tests (cases 1-4) come from the Sensors submenu
-    if (test_active >= 1 && test_active <= 4) {
+    // MPU and sensor tests (cases 1-3) come from the Sensors submenu
+    if (test_active >= 1 && test_active <= 3) {
         nav_to(scr_test_sensors, false);
     } else {
         nav_to(scr_test, false);
@@ -522,18 +522,13 @@ void cb_test_hall(lv_event_t *e) {
     populate_test_detail(); nav_to(scr_test_detail, true);
 }
 
-void cb_test_hall_top(lv_event_t *e) {
+void cb_test_battery(lv_event_t *e) {
     (void)e; test_active = 4;
     populate_test_detail(); nav_to(scr_test_detail, true);
 }
 
-void cb_test_battery(lv_event_t *e) {
-    (void)e; test_active = 5;
-    populate_test_detail(); nav_to(scr_test_detail, true);
-}
-
 void cb_test_speaker(lv_event_t *e) {
-    (void)e; test_active = 6;
+    (void)e; test_active = 5;
     populate_test_detail(); nav_to(scr_test_detail, true);
     // Test starts when the user taps the Play button (cb_spk_pause)
     // Reset state so the panel shows "Tap Play to start"

@@ -6,7 +6,6 @@
  * Handles:
  *   • Flex sensor calibration + EMA smoothing + percentage (-100..+100)
  *   • Hall-effect (side) calibration + percentage (-100..+100)
- *   • Hall-effect (top) calibration + percentage (-100..+100)
  *   • MPU6050 pitch/roll (pass-through from SensorData)
  *   • Sign-language prediction placeholder (Edge Impulse – to be implemented)
  *
@@ -32,10 +31,6 @@ struct ProcessedSensorData {
     // Hall side: -100 (back/away) → 0 (neutral) → +100 (front/close)
     int8_t   hall_pct[NUM_HALL_SENSORS];
     uint16_t hall_raw[NUM_HALL_SENSORS];
-
-    // Hall top: -100 (back) → 0 (neutral) → +100 (front)
-    int8_t   hall_top_pct[NUM_HALL_TOP_SENSORS];
-    uint16_t hall_top_raw[NUM_HALL_TOP_SENSORS];
 
     // IMU (passed through)
     float accel_x, accel_y, accel_z;
@@ -123,7 +118,6 @@ struct HallCalibInfo {
 /// Copy current calibration data into caller arrays.
 void sensor_module_get_flex_cal(FlexCalibInfo out[NUM_FLEX_SENSORS]);
 void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]);
-void sensor_module_get_hall_top_cal(HallCalibInfo out[NUM_HALL_TOP_SENSORS]);
 
 /// NVS persistence — save/load calibration data.
 void sensor_module_save_calibration();

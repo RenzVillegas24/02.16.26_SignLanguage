@@ -84,6 +84,12 @@ static void str_copy(char *dst, size_t sz, const String &src) {
 // Uses i2c_mutex to coordinate Wire access with the sensor task and
 // the touch controller.  All reads are batched under a single mutex
 // hold (~10 ms) — the sensor task handles the brief delay gracefully.
+
+// Smoothed percentage accumulator (float so the filter doesn't
+// quantise away small increments between integer steps).
+// Initialised to -1 as sentinel: first reading copies directly.
+static float s_pct_smooth = -1.0f;
+
 static void pwr_read_task(void* /*arg*/) {
     for (;;) {
         if (!pwr_task_active) {
@@ -158,9 +164,48 @@ static void pwr_read_task(void* /*arg*/) {
                 str_copy(s_info.battery_fault,      sizeof(s_info.battery_fault),      _bf);
                 str_copy(s_info.ntc_fault,           sizeof(s_info.ntc_fault),           _nf);
 
-                // Battery percentage (LiPo 3.0V = 0%, 4.104V = 100%)
-                float pct = (s_info.battery_mv / 1000.0f - 3.0f) / (4.104f - 3.0f) * 100.0f;
-                s_info.battery_pct = constrain((int)pct, 0, 100);
+                // Battery percentage
+                // ── Step 1: IR-drop compensation ─────────────────────────────
+                // During charging the SY6970 measures the terminal voltage,
+                // which is elevated above the true open-circuit voltage (OCV):
+                //   V_terminal = OCV + I_charge × R_internal
+                // Subtracting the estimated drop gives a much more accurate SOC
+                // reading the moment USB is plugged in.
+                int eff_mv = s_info.battery_mv;
+                if (cf && _cma > 0) {
+                    int compensation_mv = (_cma * BAT_INT_R_MOHM) / 1000;
+                    eff_mv -= compensation_mv;
+                }
+
+                // ── Step 2: voltage → percentage with correct range ──────────
+                // Use BAT_EMPTY_V / BAT_FULL_V from config instead of the old
+                // hardcoded 3.0 V / 4.104 V (4.104 V was lower than the real
+                // charge termination voltage, causing premature 100% readings).
+                const float range_mv = (BAT_FULL_V - BAT_EMPTY_V) * 1000.0f;
+                float raw_pct = ((float)eff_mv - BAT_EMPTY_V * 1000.0f) / range_mv * 100.0f;
+                int clamped_pct = constrain((int)raw_pct, 0, 100);
+
+                // ── Step 3: directional low-pass filter ──────────────────────
+                // Rise is smoothed slowly (alpha 0.15) so the percentage can't
+                // jump to ~100% the instant a charger is connected.
+                // Fall uses a faster alpha (0.40) so real discharge is tracked
+                // without lag.
+                if (s_pct_smooth < 0.0f) {
+                    s_pct_smooth = (float)clamped_pct;  // first read: seed directly
+                } else {
+                    float alpha = (clamped_pct > (int)s_pct_smooth) ? 0.15f : 0.40f;
+                    s_pct_smooth += alpha * ((float)clamped_pct - s_pct_smooth);
+                }
+                s_info.battery_pct = constrain((int)(s_pct_smooth + 0.5f), 0, 100);
+
+                // ── Step 4: internal ADC reading (PIN_BAT_ADC) ──────────────
+                // Read outside the I2C mutex; done here so it stays in sync
+                // with the SY6970 snapshot.  analogReadMilliVolts() uses the
+                // factory-calibrated ADC characteristic on ESP32-S3.
+                int _adc_raw = analogRead(PIN_BAT_ADC);
+                int _adc_mv  = (int)(analogReadMilliVolts(PIN_BAT_ADC) * BAT_ADC_FACTOR);
+                s_info.adc_raw = _adc_raw;
+                s_info.adc_mv  = _adc_mv;
 
                 xSemaphoreGive(pwr_mutex);
             }
@@ -485,6 +530,19 @@ void power_deep_sleep() {
         pwr_task_handle = nullptr;
     }
 
+    // ── 3a. Disable SY6970 ADC measure ───────────────────────────
+    //    The ADC was enabled at init for continuous voltage/current
+    //    sampling. Leaving it on causes the charger IC to keep
+    //    converting (~1–2 mA extra) throughout deep sleep. Disable
+    //    it now, while the I2C bus is still up and the background
+    //    task has already stopped (so no mutex contention).
+    if (sy6970_ok) {
+        sy6970->IIC_Write_Device_State(
+            sy6970->Arduino_IIC_Power::Device::POWER_DEVICE_ADC_MEASURE,
+            sy6970->Arduino_IIC_Power::Device_State::POWER_DEVICE_OFF);
+        Serial.println("[POWER] SY6970 ADC Measure OFF");
+    }
+
     // ── 4. Shut down sensors (MPU6050 → sleep, mux GPIOs → high-Z)
     sensors_shutdown();
 
@@ -517,7 +575,19 @@ void power_deep_sleep() {
     pinMode(LCD_SDIO2, INPUT);
     pinMode(LCD_SDIO3, INPUT);
     pinMode(LCD_RST,   INPUT);
-    pinMode(LCD_EN,    INPUT);     // already LOW from display_off()
+    // Drive LCD_EN OUTPUT LOW and hold it — floating lets the pin
+    // drift and can partially power the display rail during sleep.
+    pinMode(LCD_EN, OUTPUT);
+    digitalWrite(LCD_EN, LOW);
+
+    // ── 8a. Drive MUX select lines LOW ─────────────────────────
+    //    Leave the enable/signal pins as INPUT (high-Z) but sink
+    //    the select lines so the mux decodes to channel 0 and does
+    //    not float to a mid-rail on the sensor resistor networks.
+    pinMode(MUX_S0, OUTPUT); digitalWrite(MUX_S0, LOW);
+    pinMode(MUX_S1, OUTPUT); digitalWrite(MUX_S1, LOW);
+    pinMode(MUX_S2, OUTPUT); digitalWrite(MUX_S2, LOW);
+    pinMode(MUX_S3, OUTPUT); digitalWrite(MUX_S3, LOW);
 
     // ── 9. Small settle — let everything quiesce ──────────────────
     delay(100);
@@ -526,9 +596,17 @@ void power_deep_sleep() {
     //     Only GPIO 2 stays active in the RTC domain.
     _arm_wakeup_gpio();
 
-    // ── 11. Activate GPIO hold — locks every gpio_hold_en() pin LOW
-    //     through deep sleep even after the digital domain powers down.
-    //     Without this, held pins would revert to floating on power-down.
+    // ── 10a. Power down unused RTC memory domains ─────────────
+    //     Deep sleep is a full reset — no ULP code or RTC variables
+    //     are used, so both RTC slow and fast memory can be shut
+    //     down, shaving ~10–15 µA off the deep-sleep floor.
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
+
+    // ── 11. Activate GPIO hold — locks output pins at their current
+    //     driven state (OUTPUT LOW) through deep sleep even after the
+    //     digital domain powers down.  Without this, held outputs
+    //     revert to floating when the digital core powers off.
     gpio_deep_sleep_hold_en();
 
     Serial.println("[POWER] All peripherals shut down, entering deep sleep NOW");

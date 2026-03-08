@@ -70,8 +70,8 @@ void build_train() {
         "Data Forwarder via USB.\n\n"
         "Sensor data streams over\n"
         "Serial at 115200 baud.\n\n"
-        "23 features per sample:\n"
-        "5 flex, 5 hall, 5 hall-top\n"
+        "18 features per sample:\n"
+        "5 flex, 5 hall,\n"
         "accel(3), gyro(3),\n"
         "pitch, roll");
     lv_obj_set_style_text_font(info, &lv_font_montserrat_16, 0);
@@ -113,12 +113,12 @@ void build_local() {
 
     // ── Sensor bars container ──
     bars_container = lv_obj_create(cont);
-    lv_obj_set_size(bars_container, BTN_W, 15 * 20 + 10);
+    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10);
     lv_obj_set_style_bg_opa(bars_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bars_container, 0, 0);
     lv_obj_set_style_pad_all(bars_container, 0, 0);
     lv_obj_clear_flag(bars_container, LV_OBJ_FLAG_SCROLLABLE);
-    create_bars(bars_container, bar_flex, bar_hall, bar_hall_top, 0);
+    create_bars(bars_container, bar_flex, bar_hall, 0);
     if (!cfg_local_sensors) lv_obj_add_flag(bars_container, LV_OBJ_FLAG_HIDDEN);
 
     add_back_gesture(scr_local, cb_btn_back_predict);
@@ -262,7 +262,7 @@ void build_test() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Sensors submenu  (Flex, Hall Effect, Hall Top — with calibration)
+//  Sensors submenu  (Flex, Hall Effect — with calibration)
 // ════════════════════════════════════════════════════════════════════
 void build_test_sensors() {
     scr_test_sensors = mk_scr();
@@ -273,7 +273,6 @@ void build_test_sensors() {
     mk_nav_btn(cont, LV_SYMBOL_LOOP   " MPU6050",      cb_test_mpu);
     mk_nav_btn(cont, LV_SYMBOL_MINUS  " Flex Sensor",  cb_test_flex);
     mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Effect",  cb_test_hall);
-    mk_nav_btn(cont, LV_SYMBOL_GPS    " Hall Top",     cb_test_hall_top);
 
     // Calibrate button
     mk_section(cont, "CALIBRATION");
@@ -592,7 +591,7 @@ void populate_test_detail() {
     int t = test_active;
 
     // Update header title — test_names[] now include LV_SYMBOL prefixes
-    if (lbl_test_title && t >= 0 && t < 7)
+    if (lbl_test_title && t >= 0 && t < 6)
         lv_label_set_text(lbl_test_title, test_names[t]);
 
     // Hide all optional rows first
@@ -656,23 +655,9 @@ void populate_test_detail() {
             }
         }
         break;
-    case 4:
-        lv_label_set_text(lbl_test_detail,
-            sensor_module_is_calibrated()
-                ? "Hall Effect (top) Test\nTop-of-finger sensors.\n(RAW values in brackets)"
-                : "Hall Effect (top) Test\n\n" LV_SYMBOL_WARNING " Not calibrated!\nGo back and calibrate first.");
-        lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
-        if (sensor_module_is_calibrated()) {
-            lv_obj_clear_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN);
-            for (int i = 0; i < 5; i++) {
-                lv_label_set_text_fmt(sensor_test_lbls[i], "HTop %d: 0%% (R:0)", i + 1);
-                lv_bar_set_value(sensor_test_bars[i], 0, LV_ANIM_OFF);
-            }
-        }
-        break;
-    case 5: {
+    case 4: {
         PowerInfo pi = power_get_info();
-        char buf[280];
+        char buf[340];
         snprintf(buf, sizeof(buf),
             "Battery Test\n\n"
             LV_SYMBOL_BATTERY_FULL " %d%%\n"
@@ -681,16 +666,19 @@ void populate_test_detail() {
             "Input:    %d mV\n"
             "Current:  %d mA\n\n"
             "Status: %s\n"
-            "Bus:    %s",
+            "Bus:    %s\n\n"
+            "ADC raw:  %d\n"
+            "ADC volt: %d mV",
             pi.battery_pct,
             pi.battery_mv, pi.system_mv,
             pi.input_mv, pi.charge_ma,
-            pi.charge_status, pi.bus_status);
+            pi.charge_status, pi.bus_status,
+            pi.adc_raw, pi.adc_mv);
         lv_label_set_text(lbl_test_detail, buf);
         lv_obj_set_style_text_color(lbl_test_detail, accent_primary(), 0);
         break;
     }
-    case 6:
+    case 5:
         lv_label_set_text(lbl_test_detail,
             "Speaker Test\n"
             "9 audio tests in sequence.\n"

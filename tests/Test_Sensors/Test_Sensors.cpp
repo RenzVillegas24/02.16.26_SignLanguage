@@ -70,9 +70,6 @@ void loop() {
     test_sensors_format_hall(pd, buf, sizeof(buf));
     Serial.println(buf);
 
-    test_sensors_format_hall_top(pd, buf, sizeof(buf));
-    Serial.println(buf);
-
     test_sensors_format_mpu(pd, buf, sizeof(buf));
     Serial.println(buf);
 

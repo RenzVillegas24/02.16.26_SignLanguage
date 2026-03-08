@@ -29,6 +29,9 @@ struct PowerInfo {
     bool  is_charging;
     bool  usb_connected;
     int   battery_pct;         // 0–100
+    // Internal ADC (PIN_BAT_ADC voltage divider)
+    int   adc_raw;             // Raw 12-bit ADC reading (0–4095)
+    int   adc_mv;              // Compensated voltage after divider (mV)
 };
 
 void  power_init();

@@ -181,10 +181,10 @@ void build_status_bar() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  create_bars — 5 flex + 5 hall side + 5 hall top sensor bars (accent-coloured indicator)
+//  create_bars — 5 flex + 5 hall side sensor bars (accent-coloured indicator)
 // ════════════════════════════════════════════════════════════════════
 void create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
-                 lv_obj_t *hall_top[], int y_start) {
+                 int y_start) {
     const int BAR_W  = 180;
     const int BAR_H  = 14;
     const int ROW_H  = 20;
@@ -213,10 +213,8 @@ void create_bars(lv_obj_t *scr, lv_obj_t *flex[], lv_obj_t *hall[],
 
     const char *fn[]  = {"Flex 1","Flex 2","Flex 3","Flex 4","Flex 5"};
     const char *hn[]  = {"Hall 1","Hall 2","Hall 3","Hall 4","Hall 5"};
-    const char *htn[] = {"HTop 1","HTop 2","HTop 3","HTop 4","HTop 5"};
     for (int i = 0; i < 5; i++) make_bar(fn[i],  i,      flex[i]);
     for (int i = 0; i < 5; i++) make_bar(hn[i],  i + 5,  hall[i]);
-    for (int i = 0; i < 5; i++) make_bar(htn[i], i + 10, hall_top[i]);
 }
 
 // ════════════════════════════════════════════════════════════════════

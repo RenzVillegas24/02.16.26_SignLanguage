@@ -23,10 +23,6 @@ void test_sensors_format_flex(const ProcessedSensorData &pd,
 void test_sensors_format_hall(const ProcessedSensorData &pd,
                               char *buf, size_t len);
 
-/// Build a formatted OLED string for the Hall (top) test screen.
-void test_sensors_format_hall_top(const ProcessedSensorData &pd,
-                                  char *buf, size_t len);
-
 /// Build a formatted OLED string for the MPU6050 test screen.
 void test_sensors_format_mpu(const ProcessedSensorData &pd,
                              char *buf, size_t len);
