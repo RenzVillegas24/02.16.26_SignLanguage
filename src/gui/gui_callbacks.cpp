@@ -1257,6 +1257,11 @@ void cb_benchmark(lv_event_t *e) {
 // ════════════════════════════════════════════════════════════════════
 //  Power menu callbacks
 // ════════════════════════════════════════════════════════════════════
+void cb_btn_power_menu(lv_event_t *e) {
+    (void)e;
+    gui_show_power_menu();
+}
+
 void cb_power_sleep(lv_event_t *e) {
     (void)e;
     gui_hide_power_menu();

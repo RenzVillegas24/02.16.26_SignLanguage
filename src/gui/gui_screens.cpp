@@ -324,6 +324,7 @@ void build_settings() {
                                   cb_slider_sleep, &lbl_slp_val);
     add_switch_row(cont, LV_SYMBOL_EYE_CLOSE, "Always-on Screen",
                    cfg_lock_screen_on, cb_lock_screen_switch);
+    mk_nav_btn(cont, LV_SYMBOL_POWER " Power Options", cb_btn_power_menu);
 
     // -- Diagnostics — nav button to Tests --
     mk_section(cont, "DIAGNOSTICS");

@@ -361,6 +361,7 @@ void cb_benchmark(lv_event_t *e);
 bool is_bench_running();
 
 // Power menu callbacks
+void cb_btn_power_menu(lv_event_t *e);
 void cb_power_sleep(lv_event_t *e);
 void cb_power_shutdown(lv_event_t *e);
 void cb_power_restart(lv_event_t *e);

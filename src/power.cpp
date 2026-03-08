@@ -596,13 +596,6 @@ void power_deep_sleep() {
     //     Only GPIO 2 stays active in the RTC domain.
     _arm_wakeup_gpio();
 
-    // ── 10a. Power down unused RTC memory domains ─────────────
-    //     Deep sleep is a full reset — no ULP code or RTC variables
-    //     are used, so both RTC slow and fast memory can be shut
-    //     down, shaving ~10–15 µA off the deep-sleep floor.
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
-
     // ── 11. Activate GPIO hold — locks output pins at their current
     //     driven state (OUTPUT LOW) through deep sleep even after the
     //     digital domain powers down.  Without this, held outputs
