@@ -1,12 +1,15 @@
 /*
  * @file sensor_module/sensor_module.cpp
  * @brief Sensor data processing — calibration, EMA smoothing, percentage
- *        mapping, serial / OLED output, and Edge Impulse prediction stub.
+ *        mapping, serial / OLED output, and Edge Impulse inference.
  */
 #include "sensor_module.h"
 #include "sensors.h"
 #include <math.h>
 #include <Preferences.h>
+
+// Edge Impulse inference
+#include <SignGlove_inferencing.h>
 
 // ─────────────────────────────────────────────
 //  Tunables
@@ -713,29 +716,119 @@ void sensor_module_format_oled(const ProcessedSensorData &pd,
                     pd.pitch, pd.roll);
 }
 
-const char *sensor_module_predict(ProcessedSensorData &pd) {
-    // ── Edge Impulse stub ──────────────────────────
-    // TODO: Replace with actual EI classifier inference.
-    //       1. Build feature array from pd (flex_pct, hall_pct, imu)
-    //       2. Call ei_run_classifier(...)
-    //       3. Copy top label into pd.predicted_label
-    //
-    // For now, simple rule-based placeholder:
-    bool all_bent = true, all_open = true;
-    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        if (pd.flex_pct[i] < 50) all_bent = false;
-        if (pd.flex_pct[i] > 10) all_open = false;
+// ─────────────────────────────────────────────
+//  Edge Impulse sliding window buffer
+// ─────────────────────────────────────────────
+// The model expects EI_CLASSIFIER_RAW_SAMPLE_COUNT (27) frames,
+// each with EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME (18) features.
+// Total DSP input = 27 * 18 = 486 floats.
+
+static float ei_buf[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];
+static int   ei_buf_idx   = 0;
+static bool  ei_buf_full  = false;
+static uint32_t ei_last_push_ms = 0;
+
+// ei_printf implementation required by EI SDK
+void ei_printf(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+}
+
+/// Callback used by EI to read raw features from our buffer
+static int ei_get_data(size_t offset, size_t length, float *out_ptr) {
+    memcpy(out_ptr, ei_buf + offset, length * sizeof(float));
+    return 0;
+}
+
+void sensor_module_ei_push(const SensorData &raw) {
+    // Write one frame (18 features) into the sliding window buffer.
+    // Order must match the training data CSV:
+    //   flex0..flex4, hall0..hall4, ax,ay,az, gx,gy,gz, pitch, roll
+    float frame[EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME];
+    frame[0]  = (float)raw.flex[0];
+    frame[1]  = (float)raw.flex[1];
+    frame[2]  = (float)raw.flex[2];
+    frame[3]  = (float)raw.flex[3];
+    frame[4]  = (float)raw.flex[4];
+    frame[5]  = (float)raw.hall[0];
+    frame[6]  = (float)raw.hall[1];
+    frame[7]  = (float)raw.hall[2];
+    frame[8]  = (float)raw.hall[3];
+    frame[9]  = (float)raw.hall[4];
+    frame[10] = raw.accel_x;
+    frame[11] = raw.accel_y;
+    frame[12] = raw.accel_z;
+    frame[13] = raw.gyro_x;
+    frame[14] = raw.gyro_y;
+    frame[15] = raw.gyro_z;
+    frame[16] = raw.pitch;
+    frame[17] = raw.roll;
+
+    // Slide the buffer left by one frame and append the new frame at the end
+    if (ei_buf_idx >= EI_CLASSIFIER_RAW_SAMPLE_COUNT) {
+        // Buffer is full — shift left by one frame
+        memmove(ei_buf,
+                ei_buf + EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME,
+                (EI_CLASSIFIER_RAW_SAMPLE_COUNT - 1) * EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME * sizeof(float));
+        ei_buf_idx = EI_CLASSIFIER_RAW_SAMPLE_COUNT - 1;
     }
 
-    if (all_bent) {
-        strncpy(pd.predicted_label, "FIST", sizeof(pd.predicted_label));
-        pd.prediction_confidence = 0.8f;
-    } else if (all_open) {
-        strncpy(pd.predicted_label, "OPEN HAND", sizeof(pd.predicted_label));
-        pd.prediction_confidence = 0.8f;
-    } else {
+    memcpy(ei_buf + ei_buf_idx * EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME,
+           frame,
+           EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME * sizeof(float));
+    ei_buf_idx++;
+
+    if (ei_buf_idx >= EI_CLASSIFIER_RAW_SAMPLE_COUNT)
+        ei_buf_full = true;
+}
+
+bool sensor_module_ei_ready() {
+    return ei_buf_full;
+}
+
+const char *sensor_module_predict(ProcessedSensorData &pd) {
+    if (!ei_buf_full) {
         strncpy(pd.predicted_label, "---", sizeof(pd.predicted_label));
         pd.prediction_confidence = 0.0f;
+        return pd.predicted_label;
+    }
+
+    // Set up the signal structure for EI
+    signal_t signal;
+    signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+    signal.get_data = &ei_get_data;
+
+    // Run the classifier
+    ei_impulse_result_t result = { 0 };
+    EI_IMPULSE_ERROR err = run_classifier(&signal, &result, false /* debug */);
+
+    if (err != EI_IMPULSE_OK) {
+        Serial.printf("[EI] Classifier error: %d\n", (int)err);
+        strncpy(pd.predicted_label, "ERROR", sizeof(pd.predicted_label));
+        pd.prediction_confidence = 0.0f;
+        return pd.predicted_label;
+    }
+
+    // Find the label with highest confidence
+    float max_conf = 0.0f;
+    int   max_idx  = -1;
+    for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+        if (result.classification[i].value > max_conf) {
+            max_conf = result.classification[i].value;
+            max_idx  = (int)i;
+        }
+    }
+
+    if (max_idx >= 0 && max_conf > 0.5f) {
+        strncpy(pd.predicted_label,
+                result.classification[max_idx].label,
+                sizeof(pd.predicted_label));
+        pd.prediction_confidence = max_conf;
+    } else {
+        strncpy(pd.predicted_label, "---", sizeof(pd.predicted_label));
+        pd.prediction_confidence = max_conf;
     }
 
     return pd.predicted_label;

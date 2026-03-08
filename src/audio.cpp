@@ -14,6 +14,11 @@
 #include <math.h>
 #include <vector>
 
+// FreeRTOS (included via Arduino.h on ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+
 // minimp3 — single-header, public-domain (CC0) MP3 decoder
 // https://github.com/lieff/minimp3
 #define MINIMP3_IMPLEMENTATION
@@ -30,6 +35,9 @@
 #define DMA_BUF_LEN     1024
 #define TONE_BUF_LEN    512     // samples per chunk (mono)
 
+// Forward declaration for the blocking MP3 decode function
+static bool audio_play_mp3_blocking(const char* filepath);
+
 // ─────────────────────────────────────────────
 //  Module State
 // ─────────────────────────────────────────────
@@ -38,6 +46,29 @@ static volatile bool s_playing   = false;
 static float         s_volume    = 0.5f;    // 0.0 – 1.0
 static float         s_gain      = 0.0f;    // linear gain derived from dB (set in audio_init)
 static audio_poll_fn s_poll_fn   = nullptr; // optional per-chunk interrupt/pause hook
+
+// ─────────────────────────────────────────────
+//  Background audio task
+//  MP3 decoding is CPU + stack intensive (~8-12 KB).
+//  Running it on loopTask overflows the 8 KB default stack.
+//  Instead we post the file path to a queue and let a dedicated
+//  FreeRTOS task (Core 0, 16 KB stack) handle all decoding.
+// ─────────────────────────────────────────────
+#define AUDIO_TASK_STACK   (16 * 1024)
+#define AUDIO_PATH_MAX     128
+
+static QueueHandle_t   s_audio_queue  = nullptr;
+static TaskHandle_t    s_audio_task   = nullptr;
+
+static void audio_task_fn(void *) {
+    char path[AUDIO_PATH_MAX];
+    for (;;) {
+        // Block indefinitely until a path is posted
+        if (xQueueReceive(s_audio_queue, path, portMAX_DELAY) == pdTRUE) {
+            audio_play_mp3_blocking(path);
+        }
+    }
+}
 
 void audio_set_poll(audio_poll_fn fn) { s_poll_fn = fn; }
 
@@ -96,6 +127,23 @@ void audio_init() {
     if (s_installed) return;
     i2s_install(SAMPLE_RATE);
     s_gain = volume_to_gain(s_volume);   // compute initial linear gain
+
+    // Create background audio task (Core 0, 16 KB stack)
+    // MP3 decoding uses ~8-12 KB of stack; running on loopTask caused overflow.
+    if (!s_audio_queue) {
+        s_audio_queue = xQueueCreate(1, AUDIO_PATH_MAX);
+    }
+    if (!s_audio_task && s_audio_queue) {
+        xTaskCreatePinnedToCore(
+            audio_task_fn,   // function
+            "audio_mp3",     // name
+            AUDIO_TASK_STACK,// stack bytes
+            nullptr,         // param
+            2,               // priority (higher than idle, lower than sensors)
+            &s_audio_task,   // handle
+            0                // Core 0 (loop runs on Core 1)
+        );
+    }
     Serial.println("[AUDIO] I2S ready");
 }
 
@@ -429,12 +477,22 @@ void audio_play_wav_dir(const char* dirpath) {
 // look-ahead so minimp3 can always find the next sync word.
 #define MP3_INBUF_SIZE  (1024 * 8)   // 8 KB – comfortably fits ≥4 frames
 
-bool audio_play_mp3(const char* filepath) {
+// Internal blocking implementation (runs on the audio background task)
+static bool audio_play_mp3_blocking(const char* filepath) {
     if (!s_installed) return false;
+
+    // Mount LittleFS for this playback session
+    if (!LittleFS.begin(true)) {
+        Serial.println("[AUDIO] LittleFS mount failed");
+        s_playing = false;
+        return false;
+    }
 
     File file = LittleFS.open(filepath, "r");
     if (!file) {
         Serial.printf("[AUDIO] Cannot open: %s\n", filepath);
+        LittleFS.end();
+        s_playing = false;
         return false;
     }
 
@@ -555,6 +613,7 @@ bool audio_play_mp3(const char* filepath) {
     free(pcm);
     free(mono);
     file.close();
+    LittleFS.end();
 
     // Drain DMA buffers
     uint32_t rate = last_rate ? last_rate : SAMPLE_RATE;
@@ -599,6 +658,32 @@ static void mp3_collect_recursive(const String& dirpath, std::vector<String>& ou
         }
         entry = dir.openNextFile();
     }
+}
+
+// Non-blocking public API: queues filepath and returns immediately.
+// audio_is_playing() returns true until the task finishes.
+bool audio_play_mp3(const char* filepath) {
+    if (!s_audio_queue || !s_audio_task) {
+        // Fallback: no task yet — call blocking version directly
+        return audio_play_mp3_blocking(filepath);
+    }
+    if (s_playing) return false;  // already playing — caller should check audio_is_playing()
+
+    char path[AUDIO_PATH_MAX];
+    strncpy(path, filepath, AUDIO_PATH_MAX - 1);
+    path[AUDIO_PATH_MAX - 1] = '\0';
+
+    // Mark as playing NOW (before the task picks it up) to close the
+    // race window where audio_is_playing() briefly returns false after
+    // this call but before audio_play_mp3_blocking() sets s_playing.
+    s_playing = true;
+
+    // Post to queue (non-blocking — drop if somehow full)
+    if (xQueueSend(s_audio_queue, path, 0) != pdTRUE) {
+        s_playing = false;  // queue full — roll back
+        return false;
+    }
+    return true;
 }
 
 void audio_play_mp3_dir(const char* dirpath) {

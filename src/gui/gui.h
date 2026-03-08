@@ -15,6 +15,8 @@ void gui_init();                       // Create all screens, show splash → me
 void gui_update(const SensorData &d);  // Feed latest sensor data into active screen
 void gui_set_mode(AppMode mode);       // Switch to a mode screen
 void gui_set_gesture(const char *text);// Update recognized gesture label
+void gui_set_predict_confidence(float conf); // Update prediction confidence %
+void gui_set_predict_status(const char *text); // Update predict status text
 void gui_set_battery(int pct);         // Update battery indicator
 void gui_set_charging(bool charging);  // Show/hide charging bolt indicator
 void gui_show_charge_popup(bool charging, int pct);  // Full-screen charging overlay (5 s auto-dismiss)
@@ -27,6 +29,9 @@ void gui_set_train_status(const char *msg);
 
 // Train — update live sensor display (bars + IMU + counter)
 void gui_train_update(const SensorData &d, const ProcessedSensorData &pd, uint32_t sample_count);
+
+// Predict Local — update live sensor display (same style as train, percentage bars)
+void gui_local_sensor_update(const ProcessedSensorData &pd);
 
 // Settings
 void gui_set_volume(uint8_t vol);         // 0-100

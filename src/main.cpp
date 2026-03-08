@@ -38,6 +38,10 @@ static uint32_t  last_train_tx = 0;
 static uint32_t  last_bat_read = 0;
 static uint32_t  train_sample_count = 0;
 
+// EI inference timing
+static uint32_t  last_ei_push = 0;
+static char      last_spoken_label[32] = "";  // track last spoken label to avoid repeat
+
 // CPU usage tracking
 static uint32_t  cpu_busy_us   = 0;     // accumulated busy time (µs)
 static uint32_t  cpu_window_us = 0;     // accumulated total time (µs)
@@ -190,10 +194,10 @@ static void train_serial_output() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Gesture classification via sensor_module
-//  (uses sensor_module_predict — currently rule-based, future EI)
+//  Gesture classification via Edge Impulse model
 // ════════════════════════════════════════════════════════════════════
 static void classify_gesture() {
+    if (!sensor_module_ei_ready()) return;
     const char *label = sensor_module_predict(processed_data);
     strncpy(gesture_text, label, sizeof(gesture_text));
 }
@@ -425,8 +429,13 @@ void loop() {
         sensors_read(sensor_data);
         sensor_module_process(sensor_data, processed_data);
 
-        // Classify gesture only when new data arrives (was running every loop!)
+        // Push raw data into EI sliding window (~55 ms interval matches training)
         if (current_mode == MODE_PREDICT_LOCAL || current_mode == MODE_PREDICT_WEB) {
+            if (now - last_ei_push >= 55) {  // EI_CLASSIFIER_INTERVAL_MS ≈ 55.56
+                last_ei_push = now;
+                sensor_module_ei_push(sensor_data);
+            }
+            // Classify gesture when buffer is ready
             classify_gesture();
         }
     }
@@ -452,15 +461,36 @@ void loop() {
         if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             if (gui_local_show_sensors())
-                gui_update(sensor_data);
-            if (gui_local_show_words())
-                gui_set_gesture(gesture_text);
+                gui_local_sensor_update(processed_data);
+            // Always show the gesture label
+            gui_set_gesture(gesture_text);
+            gui_set_predict_confidence(processed_data.prediction_confidence);
+
+            // Update status text
+            if (!sensor_module_ei_ready()) {
+                gui_set_predict_status(LV_SYMBOL_REFRESH " Buffering...");
+            } else if (strcmp(gesture_text, "---") == 0) {
+                gui_set_predict_status(LV_SYMBOL_EYE_OPEN " Listening...");
+            } else {
+                gui_set_predict_status(LV_SYMBOL_OK " Detected!");
+            }
         }
+        // Play audio when a gesture is detected (only when label changes)
         if (gui_local_use_speech() && !audio_is_playing() && !lock_active) {
-            if (strcmp(gesture_text, "FIST") == 0)
-                audio_play_tone(440, 300);
-            else if (strcmp(gesture_text, "OPEN HAND") == 0)
-                audio_play_tone(880, 300);
+            if (strcmp(gesture_text, "---") != 0 &&
+                strcmp(gesture_text, "ERROR") != 0 &&
+                strcmp(gesture_text, last_spoken_label) != 0) {
+                // Build the audio file path: /boy/<label>.mp3
+                char audio_path[64];
+                snprintf(audio_path, sizeof(audio_path), "/boy/%s.mp3", gesture_text);
+                audio_play_mp3(audio_path);
+                strncpy(last_spoken_label, gesture_text, sizeof(last_spoken_label));
+                Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
+            }
+            // Reset spoken label tracking when gesture goes back to idle
+            if (strcmp(gesture_text, "---") == 0) {
+                last_spoken_label[0] = '\0';
+            }
         }
         break;
 
@@ -472,6 +502,7 @@ void loop() {
         if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             gui_set_gesture(gesture_text);
+            gui_set_predict_confidence(processed_data.prediction_confidence);
         }
         break;
 

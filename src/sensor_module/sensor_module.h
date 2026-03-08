@@ -95,9 +95,17 @@ void sensor_module_print_serial(const ProcessedSensorData &pd);
 void sensor_module_format_oled(const ProcessedSensorData &pd,
                                char *buf, size_t buf_len);
 
-/// (Future) Run Edge Impulse inference on ProcessedSensorData.
+/// Feed one raw sensor frame into the EI sliding window buffer.
+/// Call this every ~55 ms (EI_CLASSIFIER_INTERVAL_MS) with fresh raw data.
+void sensor_module_ei_push(const SensorData &raw);
+
+/// Run Edge Impulse inference on the accumulated sliding window.
 /// Returns the predicted label (also stored in pd.predicted_label).
+/// Confidence is stored in pd.prediction_confidence.
 const char *sensor_module_predict(ProcessedSensorData &pd);
+
+/// Check if the EI sliding window is full and ready for inference.
+bool sensor_module_ei_ready();
 
 // ─────────────────────────────────────────────
 //  Calibration info — for GUI display

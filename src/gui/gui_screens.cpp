@@ -200,33 +200,138 @@ void build_train() {
 // ════════════════════════════════════════════════════════════════════
 void build_local() {
     scr_local = mk_scr();
-    int hh = mk_header(scr_local, "Local", cb_btn_back_predict);
+    int hh = mk_header(scr_local, "Predict", cb_btn_back_predict);
 
     lv_obj_t *cont = mk_content(scr_local, hh);
 
-    // ── Gesture label (large, centred) ──
-    lbl_gesture = lv_label_create(cont);
+    // ── Status label ("Listening..." / "Detected!") ──
+    lbl_predict_status = lv_label_create(cont);
+    lv_label_set_text(lbl_predict_status, LV_SYMBOL_EYE_OPEN " Listening...");
+    lv_obj_set_style_text_font(lbl_predict_status, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(lbl_predict_status, lv_color_make(0x00, 0xE6, 0x76), 0);
+    lv_obj_set_style_text_align(lbl_predict_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(lbl_predict_status, BTN_W);
+
+    // ── Prediction card (prominent) ──
+    lv_obj_t *pred_card = lv_obj_create(cont);
+    lv_obj_set_size(pred_card, BTN_W, 120);
+    lv_obj_set_style_bg_color(pred_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(pred_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(pred_card, 16, 0);
+    lv_obj_set_style_border_width(pred_card, 2, 0);
+    lv_obj_set_style_border_color(pred_card, accent_primary(), 0);
+    lv_obj_set_style_border_opa(pred_card, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(pred_card, 12, 0);
+    lv_obj_clear_flag(pred_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── Gesture label (large, centred inside card) ──
+    lbl_gesture = lv_label_create(pred_card);
     lv_label_set_text(lbl_gesture, "---");
-    lv_obj_set_style_text_font(lbl_gesture, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_gesture, lv_color_make(0x00,0xFF,0xAA), 0);
+    lv_obj_set_style_text_font(lbl_gesture, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_color(lbl_gesture, lv_color_make(0x00, 0xFF, 0xAA), 0);
     lv_obj_set_style_text_align(lbl_gesture, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_gesture, BTN_W);
-    if (!cfg_local_words) lv_obj_add_flag(lbl_gesture, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(lbl_gesture, BTN_W - 28);
+    lv_obj_align(lbl_gesture, LV_ALIGN_CENTER, 0, -10);
+
+    // ── Confidence label (below gesture) ──
+    lbl_predict_conf = lv_label_create(pred_card);
+    lv_label_set_text(lbl_predict_conf, "");
+    lv_obj_set_style_text_font(lbl_predict_conf, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(lbl_predict_conf, tc->sub_text, 0);
+    lv_obj_set_style_text_align(lbl_predict_conf, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(lbl_predict_conf, BTN_W - 28);
+    lv_obj_align(lbl_predict_conf, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     // ── Toggle options ──
     mk_section(cont, "OPTIONS");
     add_switch_row(cont, LV_SYMBOL_LIST,       "Show Sensors",  cfg_local_sensors, cb_local_sensors);
-    add_switch_row(cont, LV_SYMBOL_EDIT,       "Show Words",    cfg_local_words,   cb_local_words);
     add_switch_row(cont, LV_SYMBOL_VOLUME_MAX, "Use Speech",    cfg_local_speech,  cb_local_speech);
 
-    // ── Sensor bars container ──
+    // ── Sensor bars container (toggled by "Show Sensors" switch) ──
+    // Mirrors the Train screen: compact bidirectional % bars with colour coding.
+    static const char *fnames[5] = { "Thm", "Idx", "Mid", "Rng", "Pnk" };
+    static const int   ROW_H_LC  = 20;
+
     bars_container = lv_obj_create(cont);
-    lv_obj_set_size(bars_container, BTN_W, 10 * 20 + 10);
+    lv_obj_set_size(bars_container, BTN_W, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(bars_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bars_container, 0, 0);
     lv_obj_set_style_pad_all(bars_container, 0, 0);
+    lv_obj_set_style_pad_row(bars_container, BTN_GAP, 0);
+    lv_obj_set_flex_flow(bars_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(bars_container, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(bars_container, LV_OBJ_FLAG_SCROLLABLE);
-    create_bars(bars_container, bar_flex, bar_hall, 0);
+
+    // ── Flex sensors card ──────────────────────────────────────────
+    lv_obj_t *lc_flex_card = lv_obj_create(bars_container);
+    lv_obj_set_size(lc_flex_card, BTN_W, 5 * ROW_H_LC + 24);
+    lv_obj_set_style_bg_color(lc_flex_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(lc_flex_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(lc_flex_card, 10, 0);
+    lv_obj_set_style_border_width(lc_flex_card, 0, 0);
+    lv_obj_set_style_pad_all(lc_flex_card, 0, 0);
+    lv_obj_clear_flag(lc_flex_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lc_flex_hdr = lv_label_create(lc_flex_card);
+    lv_label_set_text(lc_flex_hdr, "FLEX");
+    lv_obj_set_style_text_font(lc_flex_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lc_flex_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_set_pos(lc_flex_hdr, 10, 4);
+
+    for (int i = 0; i < 5; i++) {
+        train_build_bar_row(lc_flex_card, 20 + i * ROW_H_LC, fnames[i],
+                            &local_bar_flex[i], &local_lbl_flex[i],
+                            lv_color_make(0x00, 0xE6, 0x76));
+    }
+
+    // ── Hall sensors card ──────────────────────────────────────────
+    lv_obj_t *lc_hall_card = lv_obj_create(bars_container);
+    lv_obj_set_size(lc_hall_card, BTN_W, 5 * ROW_H_LC + 24);
+    lv_obj_set_style_bg_color(lc_hall_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(lc_hall_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(lc_hall_card, 10, 0);
+    lv_obj_set_style_border_width(lc_hall_card, 0, 0);
+    lv_obj_set_style_pad_all(lc_hall_card, 0, 0);
+    lv_obj_clear_flag(lc_hall_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lc_hall_hdr = lv_label_create(lc_hall_card);
+    lv_label_set_text(lc_hall_hdr, "HALL");
+    lv_obj_set_style_text_font(lc_hall_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lc_hall_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_set_pos(lc_hall_hdr, 10, 4);
+
+    for (int i = 0; i < 5; i++) {
+        train_build_bar_row(lc_hall_card, 20 + i * ROW_H_LC, fnames[i],
+                            &local_bar_hall[i], &local_lbl_hall[i],
+                            lv_color_make(0x00, 0xBB, 0xFF));
+    }
+
+    // ── IMU card ───────────────────────────────────────────────────
+    lv_obj_t *lc_imu_card = lv_obj_create(bars_container);
+    lv_obj_set_size(lc_imu_card, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(lc_imu_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(lc_imu_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(lc_imu_card, 10, 0);
+    lv_obj_set_style_border_width(lc_imu_card, 0, 0);
+    lv_obj_set_style_pad_all(lc_imu_card, 10, 0);
+    lv_obj_clear_flag(lc_imu_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lc_imu_hdr = lv_label_create(lc_imu_card);
+    lv_label_set_text(lc_imu_hdr, "IMU");
+    lv_obj_set_style_text_font(lc_imu_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lc_imu_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_align(lc_imu_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    local_lbl_imu = lv_label_create(lc_imu_card);
+    lv_label_set_text(local_lbl_imu,
+        "Ax:  0.00  Ay:  0.00  Az:  0.00\n"
+        "Gx:  0.00  Gy:  0.00  Gz:  0.00\n"
+        "Pitch:  0.0   Roll:  0.0");
+    lv_obj_set_style_text_font(local_lbl_imu, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(local_lbl_imu, tc->card_text, 0);
+    lv_obj_align(local_lbl_imu, LV_ALIGN_TOP_LEFT, 0, 18);
+
     if (!cfg_local_sensors) lv_obj_add_flag(bars_container, LV_OBJ_FLAG_HIDDEN);
 
     add_back_gesture(scr_local, cb_btn_back_predict);

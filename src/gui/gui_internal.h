@@ -105,6 +105,8 @@ extern lv_obj_t *scr_test_detail;
 //  Widget pointers  (defined in gui_api.cpp)
 // ════════════════════════════════════════════════════════════════════
 extern lv_obj_t *lbl_gesture;
+extern lv_obj_t *lbl_predict_conf;     // Confidence percentage label
+extern lv_obj_t *lbl_predict_status;   // "Listening..." / "Detected!" status
 extern lv_obj_t *bar_flex[5];
 extern lv_obj_t *bar_hall[5];
 extern lv_obj_t *bars_container;
@@ -130,6 +132,13 @@ extern lv_obj_t *train_bar_hall[5];
 extern lv_obj_t *train_lbl_hall[5];
 extern lv_obj_t *train_lbl_imu;
 extern lv_obj_t *train_lbl_counter;
+
+// Predict Local screen live sensor widgets (same style as train)
+extern lv_obj_t *local_bar_flex[5];
+extern lv_obj_t *local_lbl_flex[5];
+extern lv_obj_t *local_bar_hall[5];
+extern lv_obj_t *local_lbl_hall[5];
+extern lv_obj_t *local_lbl_imu;
 
 extern lv_obj_t *qr_wifi;
 extern lv_obj_t *qr_web;

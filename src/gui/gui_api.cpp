@@ -28,6 +28,8 @@ lv_obj_t *scr_test_detail  = nullptr;
 //  Widget pointers
 // ════════════════════════════════════════════════════════════════════
 lv_obj_t *lbl_gesture      = nullptr;
+lv_obj_t *lbl_predict_conf   = nullptr;
+lv_obj_t *lbl_predict_status = nullptr;
 
 lv_obj_t *bar_flex[5]      = {};
 lv_obj_t *bar_hall[5]      = {};
@@ -54,6 +56,13 @@ lv_obj_t *train_bar_hall[5]  = {};
 lv_obj_t *train_lbl_hall[5]  = {};
 lv_obj_t *train_lbl_imu      = nullptr;
 lv_obj_t *train_lbl_counter  = nullptr;
+
+// Predict Local screen live sensor widgets (same style as train)
+lv_obj_t *local_bar_flex[5]  = {};
+lv_obj_t *local_lbl_flex[5]  = {};
+lv_obj_t *local_bar_hall[5]  = {};
+lv_obj_t *local_lbl_hall[5]  = {};
+lv_obj_t *local_lbl_imu      = nullptr;
 
 lv_obj_t *qr_wifi           = nullptr;
 lv_obj_t *qr_web            = nullptr;
@@ -246,12 +255,9 @@ void gui_set_mode(AppMode mode) {
 }
 
 void gui_update(const SensorData &d) {
-    if (cur_gui_mode == MODE_PREDICT_LOCAL && cfg_local_sensors) {
-        for (int i = 0; i < 5; i++) {
-            lv_bar_set_value(bar_flex[i], d.flex[i], LV_ANIM_OFF);
-            lv_bar_set_value(bar_hall[i], d.hall[i], LV_ANIM_OFF);
-        }
-    }
+    // Legacy raw-ADC bars — kept for any future use but predict local now uses
+    // gui_local_sensor_update() with processed percentage data.
+    (void)d;
 }
 
 void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
@@ -357,6 +363,21 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
 
 void gui_set_gesture(const char *text) {
     if (lbl_gesture) lv_label_set_text(lbl_gesture, text);
+}
+
+void gui_set_predict_confidence(float conf) {
+    if (!lbl_predict_conf) return;
+    if (conf > 0.01f) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Confidence: %d%%", (int)(conf * 100));
+        lv_label_set_text(lbl_predict_conf, buf);
+    } else {
+        lv_label_set_text(lbl_predict_conf, "");
+    }
+}
+
+void gui_set_predict_status(const char *text) {
+    if (lbl_predict_status) lv_label_set_text(lbl_predict_status, text);
 }
 
 void gui_set_battery(int pct) {
@@ -476,6 +497,57 @@ void gui_train_update(const SensorData &d, const ProcessedSensorData &pd, uint32
         char cnt[24];
         snprintf(cnt, sizeof(cnt), "Samples: %lu", (unsigned long)sample_count);
         lv_label_set_text(train_lbl_counter, cnt);
+    }
+}
+
+void gui_local_sensor_update(const ProcessedSensorData &pd) {
+    if (!cfg_local_sensors) return;
+
+    const lv_color_t col_green = lv_color_make(0x00, 0xE6, 0x76);
+    const lv_color_t col_red   = lv_color_make(0xFF, 0x44, 0x44);
+    const lv_color_t col_cyan  = lv_color_make(0x00, 0xBB, 0xFF);
+
+    // Flex bars — green for positive (bend up), red for negative (bend down)
+    for (int i = 0; i < 5; i++) {
+        if (local_bar_flex[i]) {
+            int8_t pct = pd.flex_pct[i];
+            lv_bar_set_value(local_bar_flex[i], pct, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(local_bar_flex[i],
+                pct >= 0 ? col_green : col_red, LV_PART_INDICATOR);
+        }
+        if (local_lbl_flex[i]) {
+            char tmp[16];
+            snprintf(tmp, sizeof(tmp), "%+4d%%", (int)pd.flex_pct[i]);
+            lv_label_set_text(local_lbl_flex[i], tmp);
+        }
+    }
+
+    // Hall bars — cyan for positive (front), red for negative (back)
+    for (int i = 0; i < 5; i++) {
+        if (local_bar_hall[i]) {
+            int8_t pct = pd.hall_pct[i];
+            lv_bar_set_value(local_bar_hall[i], pct, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(local_bar_hall[i],
+                pct >= 0 ? col_cyan : col_red, LV_PART_INDICATOR);
+        }
+        if (local_lbl_hall[i]) {
+            char tmp[16];
+            snprintf(tmp, sizeof(tmp), "%+4d%%", (int)pd.hall_pct[i]);
+            lv_label_set_text(local_lbl_hall[i], tmp);
+        }
+    }
+
+    // IMU
+    if (local_lbl_imu) {
+        char imu_buf[160];
+        snprintf(imu_buf, sizeof(imu_buf),
+            "Ax:%6.2f  Ay:%6.2f  Az:%6.2f\n"
+            "Gx:%6.1f  Gy:%6.1f  Gz:%6.1f\n"
+            "Pitch:%5.1f   Roll:%5.1f",
+            pd.accel_x, pd.accel_y, pd.accel_z,
+            pd.gyro_x,  pd.gyro_y,  pd.gyro_z,
+            pd.pitch,   pd.roll);
+        lv_label_set_text(local_lbl_imu, imu_buf);
     }
 }
 
