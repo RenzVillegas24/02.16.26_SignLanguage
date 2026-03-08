@@ -56,33 +56,141 @@ void build_predict_menu() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  Train
+//  Train  — live sensor display + Edge Impulse serial streaming
 // ════════════════════════════════════════════════════════════════════
+
+/// Helper: create a labelled bar row for the train screen (compact style)
+static lv_obj_t *train_build_bar_row(lv_obj_t *parent, int y,
+                                      const char *name,
+                                      lv_obj_t **bar_out, lv_obj_t **lbl_out,
+                                      lv_color_t bar_col) {
+    const int PAD       = 10;
+    const int BAR_W_TR  = SCR_W - 2 * PAD - 90;
+    const int BAR_H_TR  = 12;
+
+    // Label (left)
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, name);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl, tc->card_text, 0);
+    lv_obj_set_pos(lbl, PAD, y);
+
+    // Bar (-100..+100)
+    lv_obj_t *bar = lv_bar_create(parent);
+    lv_obj_set_size(bar, BAR_W_TR, BAR_H_TR);
+    lv_bar_set_range(bar, -100, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_pos(bar, PAD + 38, y + 2);
+    lv_obj_set_style_bg_color(bar, tc->bar_bg, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, bar_col, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
+
+    // Value label (right)
+    lv_obj_t *val = lv_label_create(parent);
+    lv_label_set_text(val, "  0%");
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(val, tc->sub_text, 0);
+    lv_obj_set_pos(val, SCR_W - PAD - 42, y + 1);
+
+    *bar_out = bar;
+    *lbl_out = val;
+    return nullptr;  // unused
+}
+
 void build_train() {
     scr_train = mk_scr();
     int hh = mk_header(scr_train, "Train", cb_btn_back_menu);
 
+    // Scrollable content area
     lv_obj_t *cont = mk_content(scr_train, hh);
 
-    lv_obj_t *info = lv_label_create(cont);
-    lv_label_set_text(info,
-        "Connect Edge Impulse\n"
-        "Data Forwarder via USB.\n\n"
-        "Sensor data streams over\n"
-        "Serial at 115200 baud.\n\n"
-        "18 features per sample:\n"
-        "5 flex, 5 hall,\n"
-        "accel(3), gyro(3),\n"
-        "pitch, roll");
-    lv_obj_set_style_text_font(info, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(info, tc->sub_text, 0);
-    lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(info, BTN_W);
+    static const int ROW_H_TR  = 20;
+    static const int SECT_GAP  = 4;
+    static const char *fnames[5] = { "Thm", "Idx", "Mid", "Rng", "Pnk" };
 
+    // ── Status line ──────────────────────────────
     lbl_train_stat = lv_label_create(cont);
-    lv_label_set_text(lbl_train_stat, "Status: Streaming...");
-    lv_obj_set_style_text_font(lbl_train_stat, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_train_stat, lv_color_make(0x66,0xFF,0x66), 0);
+    lv_label_set_text(lbl_train_stat, LV_SYMBOL_UPLOAD " Streaming to USB...");
+    lv_obj_set_style_text_font(lbl_train_stat, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_train_stat, lv_color_make(0x00, 0xE6, 0x76), 0);
+
+    // ── Flex sensors card ────────────────────────
+    lv_obj_t *flex_card = lv_obj_create(cont);
+    lv_obj_set_size(flex_card, BTN_W, 5 * ROW_H_TR + 24);
+    lv_obj_set_style_bg_color(flex_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(flex_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(flex_card, 10, 0);
+    lv_obj_set_style_border_width(flex_card, 0, 0);
+    lv_obj_set_style_pad_all(flex_card, 0, 0);
+    lv_obj_clear_flag(flex_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *flex_hdr = lv_label_create(flex_card);
+    lv_label_set_text(flex_hdr, "FLEX");
+    lv_obj_set_style_text_font(flex_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(flex_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_set_pos(flex_hdr, 10, 4);
+
+    for (int i = 0; i < 5; i++) {
+        train_build_bar_row(flex_card, 20 + i * ROW_H_TR, fnames[i],
+                            &train_bar_flex[i], &train_lbl_flex[i],
+                            lv_color_make(0x00, 0xE6, 0x76));
+    }
+
+    // ── Hall sensors card ────────────────────────
+    lv_obj_t *hall_card = lv_obj_create(cont);
+    lv_obj_set_size(hall_card, BTN_W, 5 * ROW_H_TR + 24);
+    lv_obj_set_style_bg_color(hall_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(hall_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(hall_card, 10, 0);
+    lv_obj_set_style_border_width(hall_card, 0, 0);
+    lv_obj_set_style_pad_all(hall_card, 0, 0);
+    lv_obj_clear_flag(hall_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *hall_hdr = lv_label_create(hall_card);
+    lv_label_set_text(hall_hdr, "HALL");
+    lv_obj_set_style_text_font(hall_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(hall_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_set_pos(hall_hdr, 10, 4);
+
+    for (int i = 0; i < 5; i++) {
+        train_build_bar_row(hall_card, 20 + i * ROW_H_TR, fnames[i],
+                            &train_bar_hall[i], &train_lbl_hall[i],
+                            lv_color_make(0x00, 0xBB, 0xFF));
+    }
+
+    // ── IMU card ─────────────────────────────────
+    lv_obj_t *imu_card = lv_obj_create(cont);
+    lv_obj_set_size(imu_card, BTN_W, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(imu_card, tc->card_bg, 0);
+    lv_obj_set_style_bg_opa(imu_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(imu_card, 10, 0);
+    lv_obj_set_style_border_width(imu_card, 0, 0);
+    lv_obj_set_style_pad_all(imu_card, 10, 0);
+    lv_obj_clear_flag(imu_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *imu_hdr = lv_label_create(imu_card);
+    lv_label_set_text(imu_hdr, "IMU");
+    lv_obj_set_style_text_font(imu_hdr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(imu_hdr, lv_color_make(0xFF, 0xCC, 0x00), 0);
+    lv_obj_align(imu_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    train_lbl_imu = lv_label_create(imu_card);
+    lv_label_set_text(train_lbl_imu,
+        "Ax:  0.00  Ay:  0.00  Az:  0.00\n"
+        "Gx:  0.00  Gy:  0.00  Gz:  0.00\n"
+        "Pitch:  0.0   Roll:  0.0");
+    lv_obj_set_style_text_font(train_lbl_imu, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(train_lbl_imu, tc->card_text, 0);
+    lv_obj_align(train_lbl_imu, LV_ALIGN_TOP_LEFT, 0, 18);
+
+    // ── Sample counter ───────────────────────────
+    train_lbl_counter = lv_label_create(cont);
+    lv_label_set_text(train_lbl_counter, "Samples: 0");
+    lv_obj_set_style_text_font(train_lbl_counter, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(train_lbl_counter, lv_color_make(0x00, 0xE6, 0x76), 0);
 
     add_back_gesture(scr_train, cb_btn_back_menu);
 }

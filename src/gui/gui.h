@@ -25,6 +25,9 @@ void gui_show_web_qr(const char *url); // Set QR code content for WEB screen
 void gui_web_set_connected(bool connected); // Toggle WiFi QR ↔ webpage QR
 void gui_set_train_status(const char *msg);
 
+// Train — update live sensor display (bars + IMU + counter)
+void gui_train_update(const SensorData &d, const ProcessedSensorData &pd, uint32_t sample_count);
+
 // Settings
 void gui_set_volume(uint8_t vol);         // 0-100
 void gui_set_brightness(uint8_t brt);     // 0-255

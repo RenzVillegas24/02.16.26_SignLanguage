@@ -47,6 +47,14 @@ lv_obj_t *dd_accent        = nullptr;
 lv_obj_t *lbl_about        = nullptr;
 lv_obj_t *lbl_train_stat   = nullptr;
 
+// Train screen live sensor widgets
+lv_obj_t *train_bar_flex[5]  = {};
+lv_obj_t *train_lbl_flex[5]  = {};
+lv_obj_t *train_bar_hall[5]  = {};
+lv_obj_t *train_lbl_hall[5]  = {};
+lv_obj_t *train_lbl_imu      = nullptr;
+lv_obj_t *train_lbl_counter  = nullptr;
+
 lv_obj_t *qr_wifi           = nullptr;
 lv_obj_t *qr_web            = nullptr;
 lv_obj_t *lbl_web_stat      = nullptr;
@@ -263,21 +271,33 @@ void gui_test_update(const SensorData &d, const ProcessedSensorData &pd) {
         break;
     case 2:
         // Flex sensor test — update bars + labels with live data (including RAW)
+        // Dynamic colour: green for positive (up), red for negative (down)
         if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
+            const lv_color_t col_green = lv_color_make(0x00, 0xE6, 0x76);
+            const lv_color_t col_red   = lv_color_make(0xFF, 0x44, 0x44);
             for (int i = 0; i < 5; i++) {
-                lv_bar_set_value(sensor_test_bars[i], pd.flex_pct[i], LV_ANIM_OFF);
+                int8_t pct = pd.flex_pct[i];
+                lv_bar_set_value(sensor_test_bars[i], pct, LV_ANIM_OFF);
+                lv_obj_set_style_bg_color(sensor_test_bars[i],
+                    pct >= 0 ? col_green : col_red, LV_PART_INDICATOR);
                 lv_label_set_text_fmt(sensor_test_lbls[i], "Flex %d: %+d%% (R:%d)",
-                                      i + 1, pd.flex_pct[i], pd.flex_raw[i]);
+                                      i + 1, pct, pd.flex_raw[i]);
             }
         }
         break;
     case 3:
         // Hall effect side test — update bars + labels (including RAW)
+        // Dynamic colour: cyan for positive (front), red for negative (back)
         if (sensor_test_container && !lv_obj_has_flag(sensor_test_container, LV_OBJ_FLAG_HIDDEN)) {
+            const lv_color_t col_cyan  = lv_color_make(0x00, 0xBB, 0xFF);
+            const lv_color_t col_red   = lv_color_make(0xFF, 0x44, 0x44);
             for (int i = 0; i < 5; i++) {
-                lv_bar_set_value(sensor_test_bars[i], pd.hall_pct[i], LV_ANIM_OFF);
+                int8_t pct = pd.hall_pct[i];
+                lv_bar_set_value(sensor_test_bars[i], pct, LV_ANIM_OFF);
+                lv_obj_set_style_bg_color(sensor_test_bars[i],
+                    pct >= 0 ? col_cyan : col_red, LV_PART_INDICATOR);
                 lv_label_set_text_fmt(sensor_test_lbls[i], "Hall %d: %+d%% (R:%d)",
-                                      i + 1, pd.hall_pct[i], pd.hall_raw[i]);
+                                      i + 1, pct, pd.hall_raw[i]);
             }
         }
         break;
@@ -398,6 +418,65 @@ void gui_web_set_connected(bool connected) {
 
 void gui_set_train_status(const char *msg) {
     if (lbl_train_stat) lv_label_set_text(lbl_train_stat, msg);
+}
+
+void gui_train_update(const SensorData &d, const ProcessedSensorData &pd, uint32_t sample_count) {
+    if (cur_gui_mode != MODE_TRAIN) return;
+
+    // Colour constants matching the Test_EI_Training style
+    const lv_color_t col_green = lv_color_make(0x00, 0xE6, 0x76);
+    const lv_color_t col_red   = lv_color_make(0xFF, 0x44, 0x44);
+    const lv_color_t col_cyan  = lv_color_make(0x00, 0xBB, 0xFF);
+
+    // Flex bars — green for positive, red for negative
+    for (int i = 0; i < 5; i++) {
+        if (train_bar_flex[i]) {
+            int8_t pct = pd.flex_pct[i];
+            lv_bar_set_value(train_bar_flex[i], pct, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(train_bar_flex[i],
+                pct >= 0 ? col_green : col_red, LV_PART_INDICATOR);
+        }
+        if (train_lbl_flex[i]) {
+            char tmp[16];
+            snprintf(tmp, sizeof(tmp), "%+4d%%", (int)pd.flex_pct[i]);
+            lv_label_set_text(train_lbl_flex[i], tmp);
+        }
+    }
+
+    // Hall bars — cyan for positive, red for negative
+    for (int i = 0; i < 5; i++) {
+        if (train_bar_hall[i]) {
+            int8_t pct = pd.hall_pct[i];
+            lv_bar_set_value(train_bar_hall[i], pct, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(train_bar_hall[i],
+                pct >= 0 ? col_cyan : col_red, LV_PART_INDICATOR);
+        }
+        if (train_lbl_hall[i]) {
+            char tmp[16];
+            snprintf(tmp, sizeof(tmp), "%+4d%%", (int)pd.hall_pct[i]);
+            lv_label_set_text(train_lbl_hall[i], tmp);
+        }
+    }
+
+    // IMU text
+    if (train_lbl_imu) {
+        char imu_buf[160];
+        snprintf(imu_buf, sizeof(imu_buf),
+            "Ax:%6.2f  Ay:%6.2f  Az:%6.2f\n"
+            "Gx:%6.1f  Gy:%6.1f  Gz:%6.1f\n"
+            "Pitch:%5.1f   Roll:%5.1f",
+            pd.accel_x, pd.accel_y, pd.accel_z,
+            pd.gyro_x,  pd.gyro_y,  pd.gyro_z,
+            pd.pitch,   pd.roll);
+        lv_label_set_text(train_lbl_imu, imu_buf);
+    }
+
+    // Sample counter
+    if (train_lbl_counter) {
+        char cnt[24];
+        snprintf(cnt, sizeof(cnt), "Samples: %lu", (unsigned long)sample_count);
+        lv_label_set_text(train_lbl_counter, cnt);
+    }
 }
 
 void gui_set_volume(uint8_t vol)      { cfg_volume = vol; }

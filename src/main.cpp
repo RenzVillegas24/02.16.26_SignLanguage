@@ -36,6 +36,7 @@ static uint32_t  last_sensor   = 0;
 static uint32_t  last_display  = 0;
 static uint32_t  last_train_tx = 0;
 static uint32_t  last_bat_read = 0;
+static uint32_t  train_sample_count = 0;
 
 // CPU usage tracking
 static uint32_t  cpu_busy_us   = 0;     // accumulated busy time (µs)
@@ -438,6 +439,12 @@ void loop() {
         if (now - last_train_tx >= TRAIN_SERIAL_INTERVAL_MS) {
             last_train_tx = now;
             train_serial_output();
+            train_sample_count++;
+        }
+        // Update live sensor display on train screen
+        if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
+            last_display = now;
+            gui_train_update(sensor_data, processed_data, train_sample_count);
         }
         break;
 

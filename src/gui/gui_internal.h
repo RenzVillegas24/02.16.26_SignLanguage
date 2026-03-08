@@ -123,6 +123,14 @@ extern lv_obj_t *dd_accent;
 extern lv_obj_t *lbl_about;
 extern lv_obj_t *lbl_train_stat;
 
+// Train screen live sensor widgets
+extern lv_obj_t *train_bar_flex[5];
+extern lv_obj_t *train_lbl_flex[5];
+extern lv_obj_t *train_bar_hall[5];
+extern lv_obj_t *train_lbl_hall[5];
+extern lv_obj_t *train_lbl_imu;
+extern lv_obj_t *train_lbl_counter;
+
 extern lv_obj_t *qr_wifi;
 extern lv_obj_t *qr_web;
 extern lv_obj_t *lbl_web_stat;
