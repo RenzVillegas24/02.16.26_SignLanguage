@@ -665,6 +665,20 @@ static void mp3_collect_recursive(const String& dirpath, std::vector<String>& ou
     }
 }
 
+// ─────────────────────────────────────────────
+//  Check if an MP3 file exists on LittleFS
+//  (lightweight — no decoding, just stat)
+// ─────────────────────────────────────────────
+bool audio_mp3_exists(const char* filepath) {
+    if (!LittleFS.begin(true)) {
+        Serial.println("[AUDIO] LittleFS mount failed (exists check)");
+        return false;
+    }
+    bool found = LittleFS.exists(filepath);
+    LittleFS.end();
+    return found;
+}
+
 // Non-blocking public API: queues filepath and returns immediately.
 // audio_is_playing() returns true until the task finishes.
 bool audio_play_mp3(const char* filepath) {

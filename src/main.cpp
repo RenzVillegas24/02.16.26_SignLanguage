@@ -488,9 +488,17 @@ void loop() {
                 char audio_path[64];
                 snprintf(audio_path, sizeof(audio_path), "/%s/%s.mp3",
                          gui_local_voice_dir(), gesture_text);
-                audio_play_mp3(audio_path);
+
+                // Only attempt playback if the file actually exists on LittleFS
+                if (audio_mp3_exists(audio_path)) {
+                    audio_play_mp3(audio_path);
+                    Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
+                } else {
+                    Serial.printf("[MAIN] No audio file for label '%s' (%s)\n",
+                                  gesture_text, audio_path);
+                }
+                // Lock the label either way to prevent spamming
                 strncpy(last_spoken_label, gesture_text, sizeof(last_spoken_label));
-                Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
             }
             // Only reset the spoken-label guard once audio has finished and
             // the gesture has gone back to idle — avoids immediate re-trigger.

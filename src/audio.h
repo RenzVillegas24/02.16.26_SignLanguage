@@ -72,3 +72,4 @@ void audio_set_poll(audio_poll_fn fn);   // register / clear the poll hook
 // ─────────────────────────────────────────────
 bool audio_play_mp3(const char* filepath);          // play a single .mp3 file
 void audio_play_mp3_dir(const char* dirpath);       // play all .mp3 files in a dir
+bool audio_mp3_exists(const char* filepath);         // check if .mp3 file exists on LittleFS

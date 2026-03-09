@@ -811,6 +811,14 @@ const char *sensor_module_predict(ProcessedSensorData &pd) {
         return pd.predicted_label;
     }
 
+    // Debug: print all classification scores so we can diagnose prediction issues
+    Serial.print("[EI] Scores:");
+    for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+        Serial.printf(" %s=%.2f", result.classification[i].label,
+                       result.classification[i].value);
+    }
+    Serial.println();
+
     // Find the label with highest confidence
     float max_conf = 0.0f;
     int   max_idx  = -1;
