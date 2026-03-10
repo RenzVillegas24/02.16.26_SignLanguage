@@ -628,6 +628,9 @@ bool sensor_module_calibrate_finalize() {
 
 bool sensor_module_is_calibrated() { return s_calibrated; }
 
+// Forward declaration – defined after the stability gate section below
+static void update_stability_gate(const ProcessedSensorData &pd);
+
 void sensor_module_process(const SensorData &raw, ProcessedSensorData &out) {
     // Flex — median → adaptive EMA → deadzone → %
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
@@ -644,9 +647,12 @@ void sensor_module_process(const SensorData &raw, ProcessedSensorData &out) {
     if (!hall_ema_init) hall_ema_init = true;
 
     // IMU pass-through
-    out.accel_x = raw.accel_x;  out.accel_y = raw.accel_y;  out.accel_z = raw.accel_z;
-    out.gyro_x  = raw.gyro_x;   out.gyro_y  = raw.gyro_y;   out.gyro_z  = raw.gyro_z;
+    out.ax = raw.ax;  out.ay = raw.ay;  out.az = raw.az;
+    out.gx = raw.gx;  out.gy = raw.gy;  out.gz = raw.gz;
     out.pitch   = raw.pitch;     out.roll    = raw.roll;
+
+    // Update stability gate after processing
+    update_stability_gate(out);
 }
 
 void sensor_module_print_serial(const ProcessedSensorData &pd) {
@@ -677,12 +683,12 @@ void sensor_module_print_serial(const ProcessedSensorData &pd) {
         else
             o += snprintf(buf + o, N - o, "● Normal\n");
     }
-    if (pd.accel_x != 0 || pd.accel_y != 0 || pd.accel_z != 0) {
+    if (pd.ax != 0 || pd.ay != 0 || pd.az != 0) {
         o += snprintf(buf + o, N - o, "─── MPU6050 IMU ────────────────────────\n");
         o += snprintf(buf + o, N - o, "  Accel:  X=%7.3f  Y=%7.3f  Z=%7.3f  m/s²\n",
-                      pd.accel_x, pd.accel_y, pd.accel_z);
+                      pd.ax, pd.ay, pd.az);
         o += snprintf(buf + o, N - o, "  Gyro:   X=%7.2f  Y=%7.2f  Z=%7.2f  °/s\n",
-                      pd.gyro_x, pd.gyro_y, pd.gyro_z);
+                      pd.gx, pd.gy, pd.gz);
         o += snprintf(buf + o, N - o, "  Angles: Pitch=%6.1f°  Roll=%6.1f°\n",
                       pd.pitch, pd.roll);
     }
@@ -694,8 +700,8 @@ void sensor_module_print_serial(const ProcessedSensorData &pd) {
     for (int i = 0; i < NUM_HALL_SENSORS; i++)
         o += snprintf(buf + o, N - o, "H%d:%d,HP%d:%d,", i, pd.hall_raw[i], i, (int)pd.hall_pct[i]);
     o += snprintf(buf + o, N - o, "AX:%.2f,AY:%.2f,AZ:%.2f,GX:%.2f,GY:%.2f,GZ:%.2f,P:%.1f,R:%.1f\n\n",
-                  pd.accel_x, pd.accel_y, pd.accel_z,
-                  pd.gyro_x, pd.gyro_y, pd.gyro_z,
+                  pd.ax, pd.ay, pd.az,
+                  pd.gx, pd.gy, pd.gz,
                   pd.pitch, pd.roll);
 
     // One write — avoids per-call USB CDC overhead
@@ -717,16 +723,46 @@ void sensor_module_format_oled(const ProcessedSensorData &pd,
 }
 
 // ─────────────────────────────────────────────
+//  Stability gate for hysteresis mitigation
+// ─────────────────────────────────────────────
+// Requires flex readings to be stable for STABILITY_FRAMES consecutive
+// frames before allowing inference. This ensures the sensor has settled
+// past any hysteresis band.
+#define STABILITY_FRAMES      6
+#define STABILITY_THRESHOLD   3    // max |Δflex_pct| per frame to be "stable"
+
+static int8_t  prev_flex_pct[NUM_FLEX_SENSORS] = {0};
+static uint8_t stability_count = 0;
+static bool    gesture_stable  = false;
+
+static void update_stability_gate(const ProcessedSensorData &pd) {
+    int max_delta = 0;
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        int delta = abs((int)pd.flex_pct[i] - (int)prev_flex_pct[i]);
+        if (delta > max_delta) max_delta = delta;
+        prev_flex_pct[i] = pd.flex_pct[i];
+    }
+    if (max_delta <= STABILITY_THRESHOLD) {
+        if (stability_count < STABILITY_FRAMES) stability_count++;
+    } else {
+        stability_count = 0;
+    }
+    gesture_stable = (stability_count >= STABILITY_FRAMES);
+}
+
+bool sensor_module_gesture_stable() {
+    return gesture_stable;
+}
+
+// ─────────────────────────────────────────────
 //  Edge Impulse sliding window buffer
 // ─────────────────────────────────────────────
-// The model expects EI_CLASSIFIER_RAW_SAMPLE_COUNT (27) frames,
-// each with EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME (18) features.
-// Total DSP input = 27 * 18 = 486 floats.
+// The model expects EI_CLASSIFIER_RAW_SAMPLE_COUNT frames,
+// each with EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME features.
 
 static float ei_buf[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];
 static int   ei_buf_idx   = 0;
 static bool  ei_buf_full  = false;
-static uint32_t ei_last_push_ms = 0;
 
 // ei_printf implementation required by EI SDK
 void ei_printf(const char *format, ...) {
@@ -744,25 +780,28 @@ static int ei_get_data(size_t offset, size_t length, float *out_ptr) {
 
 void sensor_module_ei_push(const SensorData &raw) {
     // Write one frame (18 features) into the sliding window buffer.
-    // Order must match the training data CSV:
-    //   flex0..flex4, hall0..hall4, ax,ay,az, gx,gy,gz, pitch, roll
+    // IMPORTANT: Flex and Hall use CALIBRATED normalized values (-1.0 to 1.0)
+    // so the EI model sees person-agnostic, session-agnostic input.
+    // IMU stays in physical units (m/s², °/s, degrees).
+    //
+    // The offline Python normalization script must replicate this exact mapping.
     float frame[EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME];
-    frame[0]  = (float)raw.flex[0];
-    frame[1]  = (float)raw.flex[1];
-    frame[2]  = (float)raw.flex[2];
-    frame[3]  = (float)raw.flex[3];
-    frame[4]  = (float)raw.flex[4];
-    frame[5]  = (float)raw.hall[0];
-    frame[6]  = (float)raw.hall[1];
-    frame[7]  = (float)raw.hall[2];
-    frame[8]  = (float)raw.hall[3];
-    frame[9]  = (float)raw.hall[4];
-    frame[10] = raw.accel_x;
-    frame[11] = raw.accel_y;
-    frame[12] = raw.accel_z;
-    frame[13] = raw.gyro_x;
-    frame[14] = raw.gyro_y;
-    frame[15] = raw.gyro_z;
+
+    // Flex: calibrated percentage / 100.0 → [-1.0, 1.0]
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        frame[i] = (float)calc_flex_pct(i, raw.flex[i]) / 100.0f;
+    }
+    // Hall: calibrated percentage / 100.0 → [-1.0, 1.0]
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        frame[NUM_FLEX_SENSORS + i] = (float)calc_hall_side_pct(i, raw.hall[i]) / 100.0f;
+    }
+    // IMU in physical units
+    frame[10] = raw.ax;
+    frame[11] = raw.ay;
+    frame[12] = raw.az;
+    frame[13] = raw.gx;
+    frame[14] = raw.gy;
+    frame[15] = raw.gz;
     frame[16] = raw.pitch;
     frame[17] = raw.roll;
 
@@ -926,4 +965,47 @@ void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]) {
         out[i].front_range = hall_cal[i].front_range;
         out[i].back_range  = hall_cal[i].back_range;
     }
+}
+
+// ─────────────────────────────────────────────
+//  Calibration JSON export (for offline normalization)
+// ─────────────────────────────────────────────
+void sensor_module_dump_calibration_json() {
+    Serial.println("{\"calibration\":{");
+    Serial.println("  \"flex\":[");
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        Serial.printf("    {\"finger\":\"%s\",\"flat\":%d,\"up_range\":%d,\"down_range\":%d,\"deadzone\":%d}%s\n",
+                      finger_names[i],
+                      flex_cal[i].flat_value,
+                      flex_cal[i].upward_range,
+                      flex_cal[i].downward_range,
+                      flex_cal[i].noise_deadzone,
+                      (i < NUM_FLEX_SENSORS - 1) ? "," : "");
+    }
+    Serial.println("  ],");
+    Serial.println("  \"hall\":[");
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        Serial.printf("    {\"finger\":\"%s\",\"normal\":%d,\"front_range\":%d,\"back_range\":%d}%s\n",
+                      finger_names[i],
+                      hall_cal[i].normal,
+                      hall_cal[i].front_range,
+                      hall_cal[i].back_range,
+                      (i < NUM_HALL_SENSORS - 1) ? "," : "");
+    }
+    Serial.println("  ]");
+    Serial.println("}}");
+}
+
+// ─────────────────────────────────────────────
+//  Raw data streaming for Web Serial collection
+// ─────────────────────────────────────────────
+void sensor_module_stream_raw_csv(const SensorData &raw) {
+    // Format: flex0,flex1,flex2,flex3,flex4,hall0,hall1,hall2,hall3,hall4,ax,ay,az,gx,gy,gz,pitch,roll
+    // Plain CSV — 18 fields, no prefix, no timestamp.
+    Serial.printf("%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f\n",
+        raw.flex[0], raw.flex[1], raw.flex[2], raw.flex[3], raw.flex[4],
+        raw.hall[0], raw.hall[1], raw.hall[2], raw.hall[3], raw.hall[4],
+        raw.ax, raw.ay, raw.az,
+        raw.gx, raw.gy, raw.gz,
+        raw.pitch,   raw.roll);
 }

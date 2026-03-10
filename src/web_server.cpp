@@ -208,8 +208,8 @@ void web_server_update(const SensorData &d, const char *gesture) {
         d.flex[0], d.flex[1], d.flex[2], d.flex[3], d.flex[4],
         d.hall[0], d.hall[1], d.hall[2], d.hall[3], d.hall[4],
         d.pitch, d.roll,
-        d.accel_x, d.accel_y, d.accel_z,
-        d.gyro_x,  d.gyro_y,  d.gyro_z);
+        d.ax, d.ay, d.az,
+        d.gx, d.gy, d.gz);
 
     sse_broadcast(String(buf));
 }

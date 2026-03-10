@@ -75,9 +75,23 @@ Hall-effect sensors on TOP of each finger (No Longer Used)
 #define BAT_INT_R_MOHM  150
 
 // ─────────────────────────────────────────────
+//  I2C Bus
+// ─────────────────────────────────────────────
+#define I2C_FAST_MODE_HZ  400000  // 400 kHz Fast-mode (supported by FT3168, ADS1115, MPU6050)
+// Uncomment to force 400 kHz even if some devices don't support it
+// NOT RECOMMENDED — may cause instability with unsupported devices (e.g. touch controller)
+// #define I2C_FAST_MODE 
+
+// ─────────────────────────────────────────────
 //  MPU6050 IMU (shares I2C bus with FT3168)
 // ─────────────────────────────────────────────
 #define MPU6050_ADDR    0x68    // AD0 = LOW
+
+// ─────────────────────────────────────────────
+//  Serial Command Interface
+//  Comment out to disable serial command handling
+// ─────────────────────────────────────────────
+#define SERIAL_COMMAND
 
 // ─────────────────────────────────────────────
 //  WiFi AP Configuration (for WEB mode)
@@ -94,6 +108,7 @@ enum AppMode {
     MODE_TRAIN,
     MODE_PREDICT_LOCAL,
     MODE_PREDICT_WEB,
+    MODE_DATA_COLLECT,      // Web Serial raw data collection mode
     MODE_SETTINGS,
     MODE_TEST
 };
@@ -104,18 +119,19 @@ enum AppMode {
 struct SensorData {
     uint16_t flex[NUM_FLEX_SENSORS];         // Raw ADC (0-32767 via ADS1115, 0-4095 fallback)
     uint16_t hall[NUM_HALL_SENSORS];         // Raw ADC (side of finger)
-    float    accel_x, accel_y, accel_z;      // m/s²
-    float    gyro_x,  gyro_y,  gyro_z;      // rad/s
+    float    ax, ay, az;                      // m/s²
+    float    gx, gy, gz;                      // deg/s
     float    pitch, roll;                    // Degrees
 };
 
 // ─────────────────────────────────────────────
 //  Timing Constants
 // ─────────────────────────────────────────────
-#define SENSOR_READ_INTERVAL_MS     50
+#define SENSOR_READ_INTERVAL_MS     33      // ~30 Hz sensor polling
 #define DISPLAY_UPDATE_INTERVAL_MS  100
 #define BATTERY_READ_INTERVAL_MS    2000
-#define TRAIN_SERIAL_INTERVAL_MS    50
+#define TRAIN_SERIAL_INTERVAL_MS    33      // ~30 Hz serial output
+#define EI_PUSH_INTERVAL_MS         33      // ~30 Hz EI sliding window
 #define POWER_BTN_DEBOUNCE_MS       300
 #define AUTO_SLEEP_TIMEOUT_MS       60000   // 60 seconds
 #define MUX_SETTLE_US               100     // Microseconds

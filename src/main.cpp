@@ -34,7 +34,6 @@ static ProcessedSensorData processed_data = {};
 static char      gesture_text[32] = "---";
 static uint32_t  last_sensor   = 0;
 static uint32_t  last_display  = 0;
-static uint32_t  last_train_tx = 0;
 static uint32_t  last_bat_read = 0;
 static uint32_t  train_sample_count = 0;
 
@@ -59,6 +58,11 @@ static uint32_t  lock_prev_idle_ms = UINT32_MAX; // idle_ms from previous loop i
 static uint32_t  lock_last_tap_ms  = 0;           // millis() of most recent tap while locked
 static int       lock_tap_count    = 0;            // consecutive taps within window
 
+// Forward declaration — defined further below, used in on_mode_change
+#ifdef SERIAL_COMMAND
+static void stream_serial_cb(const SensorData &d);
+#endif
+
 // ════════════════════════════════════════════════════════════════════
 //  GUI → main mode-change callback
 // ════════════════════════════════════════════════════════════════════
@@ -69,8 +73,19 @@ static void on_mode_change(AppMode m) {
     // Activate/deactivate background sensor reading based on mode.
     // Menu & Settings don't need live sensor data.
     bool need_sensors = (m == MODE_TRAIN || m == MODE_PREDICT_LOCAL
-                      || m == MODE_PREDICT_WEB || m == MODE_TEST);
+                      || m == MODE_PREDICT_WEB
+#ifdef SERIAL_COMMAND
+                      || m == MODE_DATA_COLLECT
+#endif
+                      || m == MODE_TEST);
     sensors_set_active(need_sensors);
+
+#ifdef SERIAL_COMMAND
+    // Enable/disable 30 Hz serial streaming callback on Core 0.
+    // Only active in modes that pipe data to Edge Impulse / Web Serial.
+    bool need_stream = (m == MODE_TRAIN || m == MODE_DATA_COLLECT);
+    sensors_set_stream_cb(need_stream ? stream_serial_cb : NULL);
+#endif
 
     // Start / stop web server as needed
     if (m == MODE_PREDICT_WEB && !web_server_is_running()) {
@@ -173,31 +188,111 @@ static void on_test_oled() {
     // Restore after a short delay (non-blocking via flag)
 }
 
+#ifdef SERIAL_COMMAND
 // ════════════════════════════════════════════════════════════════════
-//  Edge Impulse serial streaming (TRAIN mode)
+//  Configurable streaming frequency  (can be changed via serial cmd)
 // ════════════════════════════════════════════════════════════════════
-static void train_serial_output() {
-    // Format: flex0,..,flex4,hall0,..,hall4,ax,ay,az,gx,gy,gz,pitch,roll
-    // 18 features: 5 flex + 5 hall + 3 accel + 3 gyro + pitch + roll
-    Serial.printf("%u,%u,%u,%u,%u,"
-                  "%u,%u,%u,%u,%u,"
-                  "%.2f,%.2f,%.2f,"
-                  "%.2f,%.2f,%.2f,"
-                  "%.2f,%.2f\n",
-        sensor_data.flex[0], sensor_data.flex[1], sensor_data.flex[2],
-        sensor_data.flex[3], sensor_data.flex[4],
-        sensor_data.hall[0], sensor_data.hall[1], sensor_data.hall[2],
-        sensor_data.hall[3], sensor_data.hall[4],
-        sensor_data.accel_x, sensor_data.accel_y, sensor_data.accel_z,
-        sensor_data.gyro_x,  sensor_data.gyro_y,  sensor_data.gyro_z,
-        sensor_data.pitch,   sensor_data.roll);
+static uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;  // default ~30 Hz
+
+// ════════════════════════════════════════════════════════════════════
+//  Serial streaming — driven from Core 0 sensor task at true 30 Hz
+// ════════════════════════════════════════════════════════════════════
+// This callback is invoked at 30 Hz directly from the sensor task on
+// Core 0 (via sensors_set_stream_cb).  Keeping serial output on the
+// same core as the sensor read avoids jitter from LVGL rendering on
+// Core 1, which was the cause of the reported 14-19 Hz effective rate.
+static void stream_serial_cb(const SensorData &d) {
+    sensor_module_stream_raw_csv(d);
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  Serial command handler (for Web Serial data collection app)
+// ════════════════════════════════════════════════════════════════════
+static char serial_cmd_buf[64];
+static int  serial_cmd_idx = 0;
+
+static void handle_serial_commands() {
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (serial_cmd_idx > 0) {
+                serial_cmd_buf[serial_cmd_idx] = '\0';
+
+                // Trim leading/trailing whitespace
+                char *cmd = serial_cmd_buf;
+                while (*cmd == ' ' || *cmd == '\t') cmd++;
+                int len = strlen(cmd);
+                while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\t')) len--;
+                cmd[len] = '\0';
+
+                if (strcmp(cmd, "cal_dump") == 0) {
+                    sensor_module_dump_calibration_json();
+                } else if (strcmp(cmd, "data_start") == 0) {
+                    current_mode = MODE_DATA_COLLECT;
+                    sensors_set_active(true);
+                    sensors_set_stream_cb(stream_serial_cb);
+                    Serial.println("OK:data_start");
+                } else if (strcmp(cmd, "data_stop") == 0) {
+                    current_mode = MODE_MENU;
+                    sensors_set_stream_cb(NULL);
+                    Serial.println("OK:data_stop");
+                } else if (strncmp(cmd, "set_freq=", 9) == 0) {
+                    int hz = atoi(cmd + 9);
+                    if (hz >= 1 && hz <= 100) {
+                        stream_interval_ms = 1000 / hz;
+                        sensors_set_rate_hz(hz);
+                        Serial.printf("OK:freq=%d\n", hz);
+                    } else {
+                        Serial.println("ERR:freq out of range (1-100)");
+                    }
+                } else if (strcmp(cmd, "cal_start") == 0) {
+                    // Remote calibration: phase 0 (flat hand)
+                    sensors_set_active(true);
+                    Serial.println("OK:cal_phase=0,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FLAT_HAND, nullptr);
+                    Serial.println("OK:cal_phase=0,done");
+                } else if (strcmp(cmd, "cal_phase1") == 0) {
+                    Serial.println("OK:cal_phase=1,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FIST_THUMB_UP, nullptr);
+                    Serial.println("OK:cal_phase=1,done");
+                } else if (strcmp(cmd, "cal_phase2") == 0) {
+                    Serial.println("OK:cal_phase=2,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FIST_THUMB_IN, nullptr);
+                    Serial.println("OK:cal_phase=2,done");
+                } else if (strcmp(cmd, "cal_finalize") == 0) {
+                    bool ok = sensor_module_calibrate_finalize();
+                    if (ok) {
+                        sensor_module_save_calibration();
+                        Serial.println("OK:cal_finalized");
+                        sensor_module_dump_calibration_json();
+                    } else {
+                        Serial.println("ERR:cal_finalize_failed");
+                    }
+                } else if (strcmp(cmd, "ping") == 0) {
+                    Serial.println("OK:pong");
+                } else if (strcmp(cmd, "info") == 0) {
+                    int hz = (stream_interval_ms > 0) ? (1000 / stream_interval_ms) : 30;
+                    Serial.printf("OK:SignGlove,freq=%d,features=18,cal=%d\n",
+                                  hz, sensor_module_is_calibrated() ? 1 : 0);
+                }
+                serial_cmd_idx = 0;
+            }
+        } else if (serial_cmd_idx < (int)sizeof(serial_cmd_buf) - 1) {
+            serial_cmd_buf[serial_cmd_idx++] = c;
+        }
+    }
+}
+#else
+static const uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;
+#endif  // SERIAL_COMMAND
 
 // ════════════════════════════════════════════════════════════════════
 //  Gesture classification via Edge Impulse model
 // ════════════════════════════════════════════════════════════════════
 static void classify_gesture() {
     if (!sensor_module_ei_ready()) return;
+    // Stability gate: wait for flex readings to settle past hysteresis band
+    if (!sensor_module_gesture_stable()) return;
     // Don't overwrite the displayed label while audio is speaking it —
     // the EI window keeps sliding and would switch gesture_text mid-playback,
     // either triggering a double-play or skipping the current word entirely.
@@ -260,13 +355,15 @@ void setup() {
     // 5. Power
     power_init();
     Serial.println("[MAIN] Power ready");
-    // Drain the initial USB state-change flag produced by the first SY6970 read.
-    // Without this, every cold boot / deep-sleep wakeup would trigger the popup
-    // because the background task transitions usb_connected from false → actual.
-    // We wait just long enough for the first read to complete (~500 ms task period)
-    // then discard the flag so only real live plug/unplug events show the popup.
-    delay(600);
-    power_usb_state_changed();   // silently drain boot-time edge
+    
+#ifdef I2C_FAST_MODE
+    // 5b. Lock I2C bus to Fast-mode (400 kHz) now that every driver that   
+    // calls Wire.begin() (display/touch, SY6970) has already initialised.
+    // Wire.begin() resets the clock to 100 kHz each time, so we must set
+    // it once here — after all begin() calls — as the global bus speed.
+    Wire.setClock(I2C_FAST_MODE_HZ);
+    Serial.printf("[MAIN] I2C bus clock → %d Hz (Fast-mode)\n", I2C_FAST_MODE_HZ);
+#endif
 
     // 6. System info
     sysinfo_init();
@@ -433,9 +530,9 @@ void loop() {
         sensors_read(sensor_data);
         sensor_module_process(sensor_data, processed_data);
 
-        // Push raw data into EI sliding window (~55 ms interval matches training)
+        // Push calibrated data into EI sliding window at 30 Hz
         if (current_mode == MODE_PREDICT_LOCAL || current_mode == MODE_PREDICT_WEB) {
-            if (now - last_ei_push >= 55) {  // EI_CLASSIFIER_INTERVAL_MS ≈ 55.56
+            if (now - last_ei_push >= EI_PUSH_INTERVAL_MS) {
                 last_ei_push = now;
                 sensor_module_ei_push(sensor_data);
             }
@@ -444,15 +541,23 @@ void loop() {
         }
     }
 
+#ifdef SERIAL_COMMAND
+    // ── Handle serial commands from Web Serial data collection app ──
+    handle_serial_commands();
+#endif
+
     // ── Mode-specific logic ────────────────────────────────────────
     switch (current_mode) {
 
     case MODE_TRAIN:
-        // Stream raw data over Serial for Edge Impulse
-        if (now - last_train_tx >= TRAIN_SERIAL_INTERVAL_MS) {
-            last_train_tx = now;
-            train_serial_output();
-            train_sample_count++;
+        // Serial streaming handled by Core 0 callback (stream_serial_cb)
+        {
+            // Count serial frames for the GUI (approximate — incremented by lv frame period)
+            static uint32_t last_cnt_check = 0;
+            if (now - last_cnt_check >= stream_interval_ms) {
+                last_cnt_check = now;
+                train_sample_count++;
+            }
         }
         // Update live sensor display on train screen
         if (now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
@@ -518,6 +623,10 @@ void loop() {
             gui_set_gesture(gesture_text);
             gui_set_predict_confidence(processed_data.prediction_confidence);
         }
+        break;
+
+    case MODE_DATA_COLLECT:
+        // Serial streaming handled by Core 0 callback (stream_serial_cb)
         break;
 
     case MODE_SETTINGS:

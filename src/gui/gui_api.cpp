@@ -488,8 +488,8 @@ void gui_train_update(const SensorData &d, const ProcessedSensorData &pd, uint32
             "Ax:%6.2f  Ay:%6.2f  Az:%6.2f\n"
             "Gx:%6.1f  Gy:%6.1f  Gz:%6.1f\n"
             "Pitch:%5.1f   Roll:%5.1f",
-            pd.accel_x, pd.accel_y, pd.accel_z,
-            pd.gyro_x,  pd.gyro_y,  pd.gyro_z,
+            pd.ax, pd.ay, pd.az,
+            pd.gx, pd.gy, pd.gz,
             pd.pitch,   pd.roll);
         lv_label_set_text(train_lbl_imu, imu_buf);
     }
@@ -546,8 +546,8 @@ void gui_local_sensor_update(const ProcessedSensorData &pd) {
             "Ax:%6.2f  Ay:%6.2f  Az:%6.2f\n"
             "Gx:%6.1f  Gy:%6.1f  Gz:%6.1f\n"
             "Pitch:%5.1f   Roll:%5.1f",
-            pd.accel_x, pd.accel_y, pd.accel_z,
-            pd.gyro_x,  pd.gyro_y,  pd.gyro_z,
+            pd.ax, pd.ay, pd.az,
+            pd.gx, pd.gy, pd.gz,
             pd.pitch,   pd.roll);
         lv_label_set_text(local_lbl_imu, imu_buf);
     }

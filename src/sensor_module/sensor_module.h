@@ -33,8 +33,8 @@ struct ProcessedSensorData {
     uint16_t hall_raw[NUM_HALL_SENSORS];
 
     // IMU (passed through)
-    float accel_x, accel_y, accel_z;
-    float gyro_x,  gyro_y,  gyro_z;
+    float ax, ay, az;
+    float gx, gy, gz;
     float pitch, roll;
 
     // Prediction (future Edge Impulse)
@@ -130,4 +130,15 @@ void sensor_module_get_hall_cal(HallCalibInfo out[NUM_HALL_SENSORS]);
 /// NVS persistence — save/load calibration data.
 void sensor_module_save_calibration();
 bool sensor_module_load_calibration();
+
+/// Dump calibration constants as JSON to Serial (for offline normalization).
+void sensor_module_dump_calibration_json();
+
+/// Stream raw sensor data as CSV over Serial (for Web Serial collection app).
+/// Format: DATA,timestamp,flex0..4,hall0..4,ax,ay,az,gx,gy,gz,pitch,roll
+void sensor_module_stream_raw_csv(const SensorData &raw);
+
+/// Update the stability gate (call after sensor_module_process each frame).
+/// Returns true when flex readings have been stable for enough frames.
+bool sensor_module_gesture_stable();
 

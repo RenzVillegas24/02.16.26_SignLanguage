@@ -2,15 +2,14 @@
  * @file sensors.cpp
  * @brief CD74HC4067 multiplexer + ADS1115 16-bit ADC + MPU6050 IMU
  *
- * Sensor reading runs on a FreeRTOS task pinned to Core 0.  This keeps
- * the LVGL rendering loop on Core 1 completely free of blocking I2C waits.
+ * Sensor reading runs on a FreeRTOS task pinned to Core 0 with
+ * vTaskDelayUntil() for precise 30 Hz pacing.  I2C bus runs at
+ * 400 kHz Fast-mode; the full read cycle (~16 ms) fits comfortably
+ * inside the 33 ms period.
  *
  * An I2C mutex (i2c_mutex) coordinates Wire access between:
- *   • Sensor background task   — takes mutex per-batch, releases between batches
+ *   • Sensor background task   — holds mutex during each read batch
  *   • FT3168 touch controller  — try-locks in the LVGL input callback
- *
- * Between each batch of 5 ADS1115 reads (~6 ms) the mutex is released
- * for ≥ 2 ms, giving the touch controller reliable I2C windows.
  */
 #include "sensors.h"
 #include <Wire.h>
@@ -38,6 +37,12 @@ static TaskHandle_t  s_task       = NULL;
 static volatile bool s_active     = true;       // false → task idles (menu modes)
 static SensorData    s_shared     = {};         // latest data (written by task, read by main)
 static portMUX_TYPE  s_spin       = portMUX_INITIALIZER_UNLOCKED;
+
+// Optional 30 Hz streaming callback (invoked from Core 0 sensor task)
+static volatile SensorStreamCallback s_stream_cb = NULL;
+
+// Configurable task period (default from SENSOR_READ_INTERVAL_MS)
+static volatile uint32_t s_period_ms = SENSOR_READ_INTERVAL_MS;
 
 // ── I2C bus scanner ──────────────────────────
 static void i2c_scan() {
@@ -138,64 +143,64 @@ static void mpu_read_raw(int16_t *ax, int16_t *ay, int16_t *az,
 }
 
 // ── Background sensor task ───────────────────
-// Reads all 15 mux channels + MPU6050 in a cycle.  Releases the I2C mutex
-// between each batch of 5 channels so the touch controller gets windows.
+// Reads all 10 mux channels + MPU6050 in a cycle.  Uses vTaskDelayUntil()
+// for precise 30 Hz pacing instead of ad-hoc delays.
+// At 400 kHz I2C the full read cycle takes ~16 ms, leaving comfortable
+// headroom inside the 33 ms period.
 static void sensor_task_fn(void *) {
     static const uint8_t flex_ch[NUM_FLEX_SENSORS] = {
         MUX_CH_FLEX_THUMB,  MUX_CH_FLEX_INDEX,  MUX_CH_FLEX_MIDDLE,
         MUX_CH_FLEX_RING,   MUX_CH_FLEX_PINKY
     };
 
+    TickType_t xLastWake = xTaskGetTickCount();
+
     for (;;) {
         if (!s_active) {
             vTaskDelay(pdMS_TO_TICKS(100));   // idle — check again in 100 ms
+            xLastWake = xTaskGetTickCount();   // reset epoch after idle
             continue;
         }
 
+        const TickType_t xPeriod = pdMS_TO_TICKS(s_period_ms);
+
         SensorData d = {};
 
-        // ── Dummy MUX_0 read — settles ADC after channel gap between cycles ──
-        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
-            mux_select(0);
-            ads_or_adc_read();   // throwaway read
-            xSemaphoreGive(i2c_mutex);
-        }
-
-        // ── Flex sensors (5 channels, ~6 ms with ADS1115) ──
-        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+        // ── ADC reads: flex + hall (10 channels) ──
+        // Single mutex lock for all mux+ADS1115 reads to avoid
+        // repeated lock/unlock overhead.  Touch callback uses
+        // non-blocking try-lock and carries forward the last position,
+        // so holding the bus for ~15 ms is safe.
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(30))) {
             for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
                 mux_select(flex_ch[i]);
                 d.flex[i] = ads_or_adc_read();
             }
-            xSemaphoreGive(i2c_mutex);
-        }
-        vTaskDelay(pdMS_TO_TICKS(2));         // window for touch
-
-        // ── Hall sensors — side (5 channels) ──
-        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
             for (int i = 0; i < NUM_HALL_SENSORS; i++) {
                 mux_select(MUX_CH_HALL_THUMB + i);
                 d.hall[i] = ads_or_adc_read();
             }
             xSemaphoreGive(i2c_mutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
 
-        // ── MPU6050 (single burst read, ~1 ms) ──
+        // Brief yield so touch controller can grab the bus
+        taskYIELD();
+
+        // ── MPU6050 (single burst read, ~0.5 ms at 400 kHz) ──
         if (mpu_ok) {
-            if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(20))) {
+            if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(10))) {
                 int16_t ax, ay, az, gx, gy, gz;
                 mpu_read_raw(&ax, &ay, &az, &gx, &gy, &gz);
                 xSemaphoreGive(i2c_mutex);
 
-                d.accel_x = ax / 16384.0f * 9.81f;
-                d.accel_y = ay / 16384.0f * 9.81f;
-                d.accel_z = az / 16384.0f * 9.81f;
-                d.gyro_x  = gx / 131.0f;
-                d.gyro_y  = gy / 131.0f;
-                d.gyro_z  = gz / 131.0f;
-                d.pitch = atan2f(d.accel_x, sqrtf(d.accel_y * d.accel_y + d.accel_z * d.accel_z)) * 180.0f / PI;
-                d.roll  = atan2f(d.accel_y, sqrtf(d.accel_x * d.accel_x + d.accel_z * d.accel_z)) * 180.0f / PI;
+                d.ax = ax / 16384.0f * 9.81f;
+                d.ay = ay / 16384.0f * 9.81f;
+                d.az = az / 16384.0f * 9.81f;
+                d.gx = gx / 131.0f;
+                d.gy = gy / 131.0f;
+                d.gz = gz / 131.0f;
+                d.pitch = atan2f(d.ax, sqrtf(d.ay * d.ay + d.az * d.az)) * 180.0f / PI;
+                d.roll  = atan2f(d.ay, sqrtf(d.ax * d.ax + d.az * d.az)) * 180.0f / PI;
             }
         }
 
@@ -204,8 +209,16 @@ static void sensor_task_fn(void *) {
         s_shared = d;
         taskEXIT_CRITICAL(&s_spin);
 
-        // Pace: ~25–30 Hz effective rate with the inter-batch delays above
-        vTaskDelay(pdMS_TO_TICKS(8));
+        // ── Invoke streaming callback (serial CSV output etc.) ──
+        // Runs on Core 0 at a guaranteed 30 Hz, fully decoupled from
+        // LVGL rendering on Core 1.
+        SensorStreamCallback cb = s_stream_cb;
+        if (cb) cb(d);
+
+        // Precise 30 Hz pacing — sleeps exactly the remaining time in the
+        // 33 ms period.  If the cycle overruns, the next iteration starts
+        // immediately (no drift accumulation).
+        vTaskDelayUntil(&xLastWake, xPeriod);
     }
 }
 
@@ -215,6 +228,10 @@ void sensors_init() {
 
     // Create I2C mutex FIRST — touch callback checks for non-NULL before locking
     i2c_mutex = xSemaphoreCreateMutex();
+
+    // NOTE: Wire.setClock(I2C_FAST_MODE_HZ) is called in setup() (main.cpp)
+    // *after* power_init(), which is the last driver to call Wire.begin().
+    // Setting it here would be overridden by sy6970->begin() → Wire.begin().
 
     // ── I2C bus scan (mutex-protected) ──
     xSemaphoreTake(i2c_mutex, portMAX_DELAY);
@@ -251,6 +268,17 @@ bool sensors_ads_available() { return ads_ok; }
 
 void sensors_set_active(bool active) {
     s_active = active;
+}
+
+void sensors_set_stream_cb(SensorStreamCallback cb) {
+    s_stream_cb = cb;
+}
+
+void sensors_set_rate_hz(int hz) {
+    if (hz < 1)   hz = 1;
+    if (hz > 100) hz = 100;
+    s_period_ms = 1000 / hz;
+    Serial.printf("[SENSORS] Task rate → %d Hz (%lu ms)\n", hz, (unsigned long)s_period_ms);
 }
 
 void sensors_read(SensorData &d) {

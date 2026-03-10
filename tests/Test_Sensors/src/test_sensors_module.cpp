@@ -71,7 +71,7 @@ void test_sensors_format_mpu(const ProcessedSensorData &pd,
              "  Z: %7.2f d/s\n\n"
              "Pitch: %6.1f\n"
              "Roll:  %6.1f",
-             pd.accel_x, pd.accel_y, pd.accel_z,
-             pd.gyro_x, pd.gyro_y, pd.gyro_z,
+             pd.ax, pd.ay, pd.az,
+             pd.gx, pd.gy, pd.gz,
              pd.pitch, pd.roll);
 }

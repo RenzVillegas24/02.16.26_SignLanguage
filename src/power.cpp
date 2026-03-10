@@ -139,7 +139,8 @@ static void pwr_read_task(void* /*arg*/) {
 
                 // ── Derive booleans ──
                 bool cf = (_cs == "Pre Chargeing" || _cs == "Fast Charging");
-                bool uc = (_bs != "No Input" && !_bs.startsWith("->"));
+                // Guard against empty strings from I2C errors — treat as "No Input"
+                bool uc = (_bs.length() > 0) && (_bs != "No Input") && !_bs.startsWith("->");
 
                 // ── Copy into shared struct under pwr_mutex ──
                 xSemaphoreTake(pwr_mutex, portMAX_DELAY);
@@ -280,6 +281,26 @@ void power_init() {
             sy6970->Arduino_IIC_Power::Device_Value::POWER_DEVICE_OTG_CHARGING_LIMIT, 500);
 
         Serial.println("[POWER] SY6970 configuration applied");
+
+        // ── Seed initial USB state ───────────────────────────────
+        // Read the real USB state NOW (while we hold i2c_mutex) so
+        // the background task starts with the correct baseline.
+        // If s_info.usb_connected were left as false (zero-init),
+        // the first async read would always look like a plug/unplug
+        // edge and fire a spurious charge popup at every boot.
+        {
+            String bs_init = sy6970->IIC_Read_Device_State(
+                sy6970->Arduino_IIC_Power::Status_Information::POWER_BUS_STATUS);
+            bool uc_init = (bs_init.length() > 0)
+                        && (bs_init != "No Input")
+                        && !bs_init.startsWith("->");
+            xSemaphoreTake(pwr_mutex, portMAX_DELAY);
+            s_info.usb_connected = uc_init;
+            xSemaphoreGive(pwr_mutex);
+            Serial.printf("[POWER] Initial USB state: %s (%s)\n",
+                          uc_init ? "connected" : "disconnected", bs_init.c_str());
+        }
+
         sy6970_ok = true;
     } else {
         Serial.println("[POWER] SY6970 init FAILED — charger monitoring disabled");
