@@ -293,12 +293,21 @@ static void classify_gesture() {
     if (!sensor_module_ei_ready()) return;
     // Stability gate: wait for flex readings to settle past hysteresis band
     if (!sensor_module_gesture_stable()) return;
-    // Don't overwrite the displayed label while audio is speaking it —
-    // the EI window keeps sliding and would switch gesture_text mid-playback,
-    // either triggering a double-play or skipping the current word entirely.
-    if (audio_is_playing()) return;
+
     const char *label = sensor_module_predict(processed_data);
-    strncpy(gesture_text, label, sizeof(gesture_text));
+
+    // Non-sign classes (close, close1, close2, relaxed, random) mean "not signing".
+    // Map them to "---" so the display shows idle and audio is never attempted.
+    if (sensor_module_is_nonsign_label(label)) {
+        strncpy(gesture_text, "---", sizeof(gesture_text));
+    } else {
+        // Only update the display text if audio is NOT playing — prevents
+        // the label from flickering to a new gesture mid-speech.
+        if (!audio_is_playing()) {
+            strncpy(gesture_text, label, sizeof(gesture_text));
+        }
+        // Still allow non-sign → idle transitions even during playback
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -588,21 +597,23 @@ void loop() {
         if (gui_local_use_speech() && !audio_is_playing() && !lock_active) {
             if (strcmp(gesture_text, "---") != 0 &&
                 strcmp(gesture_text, "ERROR") != 0 &&
+                !sensor_module_is_nonsign_label(gesture_text) &&   // never speak null classes
                 strcmp(gesture_text, last_spoken_label) != 0) {
                 // Build the audio file path: /<voice>/<label>.mp3
                 char audio_path[64];
                 snprintf(audio_path, sizeof(audio_path), "/%s/%s.mp3",
                          gui_local_voice_dir(), gesture_text);
 
-                // Only attempt playback if the file actually exists on LittleFS
+                // Only attempt playback if the file actually exists on LittleFS.
+                // This silently skips FSL labels not yet recorded as audio.
                 if (audio_mp3_exists(audio_path)) {
                     audio_play_mp3(audio_path);
                     Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
                 } else {
-                    Serial.printf("[MAIN] No audio file for label '%s' (%s)\n",
+                    Serial.printf("[MAIN] No audio file for label '%s' (%s) — skipping\n",
                                   gesture_text, audio_path);
                 }
-                // Lock the label either way to prevent spamming
+                // Lock the label either way to prevent repeat-spam
                 strncpy(last_spoken_label, gesture_text, sizeof(last_spoken_label));
             }
             // Only reset the spoken-label guard once audio has finished and

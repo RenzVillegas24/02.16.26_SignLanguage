@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // Edge Impulse inference
-#include <SignGlove_inferencing.h>
+#include <DaluyanSignaTest_inferencing.h>
 
 // ─────────────────────────────────────────────
 //  Tunables
@@ -780,20 +780,22 @@ static int ei_get_data(size_t offset, size_t length, float *out_ptr) {
 
 void sensor_module_ei_push(const SensorData &raw) {
     // Write one frame (18 features) into the sliding window buffer.
-    // IMPORTANT: Flex and Hall use CALIBRATED normalized values (-1.0 to 1.0)
-    // so the EI model sees person-agnostic, session-agnostic input.
-    // IMU stays in physical units (m/s², °/s, degrees).
+    // IMPORTANT: The EI model was trained on RAW sensor values from Data Forwarder
+    // (stream_raw_csv format). Inference input MUST match training input exactly:
+    //   flex/hall  → raw uint16 ADC values (cast to float)
+    //   IMU        → physical units (m/s², °/s, degrees)
     //
-    // The offline Python normalization script must replicate this exact mapping.
+    // Do NOT normalize/calibrate here — the EI DSP pipeline (standard scaler)
+    // handles all normalization internally using the training distribution.
     float frame[EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME];
 
-    // Flex: calibrated percentage / 100.0 → [-1.0, 1.0]
+    // Flex: raw ADC values (matching Data Forwarder training data)
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-        frame[i] = (float)calc_flex_pct(i, raw.flex[i]) / 100.0f;
+        frame[i] = (float)raw.flex[i];
     }
-    // Hall: calibrated percentage / 100.0 → [-1.0, 1.0]
+    // Hall: raw ADC values
     for (int i = 0; i < NUM_HALL_SENSORS; i++) {
-        frame[NUM_FLEX_SENSORS + i] = (float)calc_hall_side_pct(i, raw.hall[i]) / 100.0f;
+        frame[NUM_FLEX_SENSORS + i] = (float)raw.hall[i];
     }
     // IMU in physical units
     frame[10] = raw.ax;
@@ -827,6 +829,30 @@ bool sensor_module_ei_ready() {
     return ei_buf_full;
 }
 
+// ─────────────────────────────────────────────
+//  Non-sign (null) class registry
+// ─────────────────────────────────────────────
+// These are idle/rejection classes collected to teach the model what
+// is NOT a sign. They must never trigger audio playback.
+// Update this list whenever new null classes are added to the EI project.
+static const char * const NONSIGN_LABELS[] = {
+    "close1",    // closed fist — thumb outside
+    "close2",    // closed fist — thumb inside
+    "close",
+    "relaxed",   // flat/open resting hand
+    "random",    // catch-all transition/rejection movements
+    nullptr      // sentinel — do not remove
+};
+
+bool sensor_module_is_nonsign_label(const char *label) {
+    if (!label) return false;
+    for (int i = 0; NONSIGN_LABELS[i] != nullptr; i++) {
+        if (strcmp(label, NONSIGN_LABELS[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
 const char *sensor_module_predict(ProcessedSensorData &pd) {
     if (!ei_buf_full) {
         strncpy(pd.predicted_label, "---", sizeof(pd.predicted_label));
@@ -840,7 +866,8 @@ const char *sensor_module_predict(ProcessedSensorData &pd) {
     signal.get_data = &ei_get_data;
 
     // Run the classifier
-    ei_impulse_result_t result = { 0 };
+    ei_impulse_result_t result;
+    memset(&result, 0, sizeof(result));
     EI_IMPULSE_ERROR err = run_classifier(&signal, &result, false /* debug */);
 
     if (err != EI_IMPULSE_OK) {
@@ -850,13 +877,19 @@ const char *sensor_module_predict(ProcessedSensorData &pd) {
         return pd.predicted_label;
     }
 
-    // Debug: print all classification scores so we can diagnose prediction issues
-    Serial.print("[EI] Scores:");
-    for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-        Serial.printf(" %s=%.2f", result.classification[i].label,
-                       result.classification[i].value);
+    // Debug: print classification scores periodically (not every frame — avoids
+    // flooding USB CDC which can cause backpressure stalls on ESP32-S3)
+    static uint32_t last_score_print = 0;
+    uint32_t now_ms = millis();
+    if (now_ms - last_score_print >= 1000) {
+        last_score_print = now_ms;
+        Serial.print("[EI] Scores:");
+        for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+            Serial.printf(" %s=%.2f", result.classification[i].label,
+                           result.classification[i].value);
+        }
+        Serial.println();
     }
-    Serial.println();
 
     // Find the label with highest confidence
     float max_conf = 0.0f;

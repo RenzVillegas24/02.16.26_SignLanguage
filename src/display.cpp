@@ -62,12 +62,12 @@ static void lvgl_touch_cb(lv_indev_drv_t * /*drv*/, lv_indev_data_t *data) {
     uint32_t now = millis();
 
     if (touch_controller->IIC_Interrupt_Flag) {
-        // New hardware data is ready — try to read it.
-        // Try-lock: if sensor task holds I2C, skip the HW read this cycle
-        // but keep reporting the last known state (NOT a spurious release).
-        if (i2c_mutex && xSemaphoreTake(i2c_mutex, 0) != pdTRUE) {
-            // Bus busy — carry forward last state unchanged.
-            // Leave IIC_Interrupt_Flag set so we retry next cycle.
+        // Block for up to 5 ms waiting for the I2C bus.
+        // The sensor task holds the bus in ~7 ms batches separated by 1-tick
+        // gaps, so a 5 ms wait is enough to always catch a free window without
+        // noticeably delaying the LVGL frame (which already takes ~30 ms).
+        if (i2c_mutex && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+            // Still busy after 5 ms — carry forward last state and retry next cycle.
             data->state   = s_touch_state;
             data->point.x = s_touch_x;
             data->point.y = s_touch_y;

@@ -107,6 +107,12 @@ const char *sensor_module_predict(ProcessedSensorData &pd);
 /// Check if the EI sliding window is full and ready for inference.
 bool sensor_module_ei_ready();
 
+/// Returns true if the label belongs to a non-sign / null class
+/// (e.g. close, close1, close2, relaxed, random) that should NEVER trigger
+/// audio playback — even if an MP3 file happens to exist for it.
+/// Add new null-class names here whenever the EI project is updated.
+bool sensor_module_is_nonsign_label(const char *label);
+
 // ─────────────────────────────────────────────
 //  Calibration info — for GUI display
 // ─────────────────────────────────────────────

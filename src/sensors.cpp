@@ -143,10 +143,10 @@ static void mpu_read_raw(int16_t *ax, int16_t *ay, int16_t *az,
 }
 
 // ── Background sensor task ───────────────────
-// Reads all 10 mux channels + MPU6050 in a cycle.  Uses vTaskDelayUntil()
-// for precise 30 Hz pacing instead of ad-hoc delays.
-// At 400 kHz I2C the full read cycle takes ~16 ms, leaving comfortable
-// headroom inside the 33 ms period.
+// Reads 5 flex + 5 hall channels + MPU6050 in three short I2C batches
+// with 1-tick mutex-free gaps between them so the touch controller on
+// Core 1 can reliably read the FT3168.  vTaskDelayUntil() absorbs the
+// inter-batch delays — the 30 Hz rate is maintained precisely.
 static void sensor_task_fn(void *) {
     static const uint8_t flex_ch[NUM_FLEX_SENSORS] = {
         MUX_CH_FLEX_THUMB,  MUX_CH_FLEX_INDEX,  MUX_CH_FLEX_MIDDLE,
@@ -166,16 +166,21 @@ static void sensor_task_fn(void *) {
 
         SensorData d = {};
 
-        // ── ADC reads: flex + hall (10 channels) ──
-        // Single mutex lock for all mux+ADS1115 reads to avoid
-        // repeated lock/unlock overhead.  Touch callback uses
-        // non-blocking try-lock and carries forward the last position,
-        // so holding the bus for ~15 ms is safe.
+        // ── Flex sensors (5 channels, ~7 ms at 400 kHz) ──
         if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(30))) {
             for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
                 mux_select(flex_ch[i]);
                 d.flex[i] = ads_or_adc_read();
             }
+            xSemaphoreGive(i2c_mutex);
+        }
+
+        // 1-tick window for the touch controller to grab the I2C bus.
+        // Absorbed by vTaskDelayUntil — does NOT add to the 33 ms period.
+        vTaskDelay(1);
+
+        // ── Hall sensors (5 channels, ~7 ms at 400 kHz) ──
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(30))) {
             for (int i = 0; i < NUM_HALL_SENSORS; i++) {
                 mux_select(MUX_CH_HALL_THUMB + i);
                 d.hall[i] = ads_or_adc_read();
@@ -183,8 +188,8 @@ static void sensor_task_fn(void *) {
             xSemaphoreGive(i2c_mutex);
         }
 
-        // Brief yield so touch controller can grab the bus
-        taskYIELD();
+        // Another 1-tick window before the MPU read.
+        vTaskDelay(1);
 
         // ── MPU6050 (single burst read, ~0.5 ms at 400 kHz) ──
         if (mpu_ok) {
