@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // Edge Impulse inference
-#include <DaluyanSignaTest_inferencing.h>
+#include <model.h>
 
 // ─────────────────────────────────────────────
 //  Tunables
@@ -838,8 +838,9 @@ bool sensor_module_ei_ready() {
 static const char * const NONSIGN_LABELS[] = {
     "close1",    // closed fist — thumb outside
     "close2",    // closed fist — thumb inside
-    "close",
+    "close",     // any closed fist
     "relaxed",   // flat/open resting hand
+    "rest",      // any resting/neutral pose (relaxed, flat, etc)
     "random",    // catch-all transition/rejection movements
     nullptr      // sentinel — do not remove
 };
@@ -884,24 +885,43 @@ const char *sensor_module_predict(ProcessedSensorData &pd) {
     if (now_ms - last_score_print >= 1000) {
         last_score_print = now_ms;
         Serial.print("[EI] Scores:");
+        bool printed_any = false;
         for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-            Serial.printf(" %s=%.2f", result.classification[i].label,
-                           result.classification[i].value);
+            if (result.classification[i].value > 0.0f) {
+                Serial.printf(" %s=%.2f", result.classification[i].label,
+                               result.classification[i].value);
+                printed_any = true;
+            }
         }
+        if (!printed_any) Serial.print(" (none)");
         Serial.println();
     }
 
-    // Find the label with highest confidence
+    // Find top-1 and top-2 confidences
     float max_conf = 0.0f;
+    float second_conf = 0.0f;
     int   max_idx  = -1;
     for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-        if (result.classification[i].value > max_conf) {
-            max_conf = result.classification[i].value;
+        float v = result.classification[i].value;
+        if (v > max_conf) {
+            second_conf = max_conf;
+            max_conf = v;
             max_idx  = (int)i;
+        } else if (v > second_conf) {
+            second_conf = v;
         }
     }
 
-    if (max_idx >= 0 && max_conf > 0.5f) {
+    // Uncertainty gate: if too low confidence or too close to runner-up,
+    // return no prediction to avoid misinterpretation.
+    bool uncertain = true;
+    if (max_idx >= 0) {
+        float margin = max_conf - second_conf;
+        uncertain = (max_conf < EI_UNCERTAIN_MIN_CONF) ||
+                    (margin   < EI_UNCERTAIN_MIN_MARGIN);
+    }
+
+    if (!uncertain && max_idx >= 0) {
         strncpy(pd.predicted_label,
                 result.classification[max_idx].label,
                 sizeof(pd.predicted_label));

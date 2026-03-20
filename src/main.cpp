@@ -39,6 +39,22 @@ static uint32_t  train_sample_count = 0;
 
 // EI inference timing
 static uint32_t  last_ei_push = 0;
+static uint32_t  last_ei_infer = 0;
+static uint32_t  last_motion_ms = 0;
+static uint32_t  current_infer_interval_ms = EI_INFER_INTERVAL_MS;
+
+// Motion tracking for adaptive fast/slow inference cadence
+static bool      infer_motion_seeded = false;
+static int8_t    prev_flex_pct[NUM_FLEX_SENSORS] = {0};
+static int8_t    prev_hall_pct[NUM_HALL_SENSORS] = {0};
+static float     prev_pitch = 0.0f;
+static float     prev_roll  = 0.0f;
+
+// Prediction handover guard (reduces flicker on near-tie classes)
+static char      stable_pred_label[32] = "---";
+static float     stable_pred_conf = 0.0f;
+static char      pending_pred_label[32] = "---";
+static uint8_t   pending_pred_count = 0;
 static char      last_spoken_label[32] = "";  // track last spoken label to avoid repeat
 
 // CPU usage tracking
@@ -62,6 +78,41 @@ static int       lock_tap_count    = 0;            // consecutive taps within wi
 #ifdef SERIAL_COMMAND
 static void stream_serial_cb(const SensorData &d);
 #endif
+
+static bool prediction_motion_detected(const ProcessedSensorData &pd) {
+    if (!infer_motion_seeded) {
+        for (int i = 0; i < NUM_FLEX_SENSORS; i++) prev_flex_pct[i] = pd.flex_pct[i];
+        for (int i = 0; i < NUM_HALL_SENSORS; i++) prev_hall_pct[i] = pd.hall_pct[i];
+        prev_pitch = pd.pitch;
+        prev_roll  = pd.roll;
+        infer_motion_seeded = true;
+        return false;
+    }
+
+    int max_flex_delta = 0;
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+        int d = abs((int)pd.flex_pct[i] - (int)prev_flex_pct[i]);
+        if (d > max_flex_delta) max_flex_delta = d;
+        prev_flex_pct[i] = pd.flex_pct[i];
+    }
+
+    int max_hall_delta = 0;
+    for (int i = 0; i < NUM_HALL_SENSORS; i++) {
+        int d = abs((int)pd.hall_pct[i] - (int)prev_hall_pct[i]);
+        if (d > max_hall_delta) max_hall_delta = d;
+        prev_hall_pct[i] = pd.hall_pct[i];
+    }
+
+    float pitch_delta = fabsf(pd.pitch - prev_pitch);
+    float roll_delta  = fabsf(pd.roll  - prev_roll);
+    prev_pitch = pd.pitch;
+    prev_roll  = pd.roll;
+
+    return (max_flex_delta >= EI_MOTION_FLEX_DELTA) ||
+           (max_hall_delta >= EI_MOTION_HALL_DELTA) ||
+           (pitch_delta >= EI_MOTION_ANGLE_DELTA) ||
+           (roll_delta  >= EI_MOTION_ANGLE_DELTA);
+}
 
 // ════════════════════════════════════════════════════════════════════
 //  GUI → main mode-change callback
@@ -97,6 +148,18 @@ static void on_mode_change(AppMode m) {
     }
 
     Serial.printf("[MAIN] Mode → %d\n", (int)m);
+
+    // Reset adaptive inference state when mode changes
+    last_ei_push = 0;
+    last_ei_infer = 0;
+    last_motion_ms = 0;
+    current_infer_interval_ms = EI_INFER_INTERVAL_MS;
+    infer_motion_seeded = false;
+    stable_pred_conf = 0.0f;
+    strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
+    strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+    pending_pred_count = 0;
+
     power_reset_idle_timer();
 }
 
@@ -291,20 +354,86 @@ static const uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;
 // ════════════════════════════════════════════════════════════════════
 static void classify_gesture() {
     if (!sensor_module_ei_ready()) return;
-    // Stability gate: wait for flex readings to settle past hysteresis band
-    if (!sensor_module_gesture_stable()) return;
 
-    const char *label = sensor_module_predict(processed_data);
+    const char *raw_label = sensor_module_predict(processed_data);
+    float raw_conf = processed_data.prediction_confidence;
 
-    // Non-sign classes (close, close1, close2, relaxed, random) mean "not signing".
-    // Map them to "---" so the display shows idle and audio is never attempted.
-    if (sensor_module_is_nonsign_label(label)) {
+    const char *label = sensor_module_is_nonsign_label(raw_label) ? "---" : raw_label;
+
+    // Robust anti-random state machine:
+    //  1) Need higher confidence + N consecutive frames to ENTER/SWITCH sign
+    //  2) Lower threshold to STAY in current sign (hysteresis)
+    //  3) During low confidence / transition noise, fall back to idle (---)
+    bool candidate_is_sign = (strcmp(label, "---") != 0) && (raw_conf >= EI_SIGN_ENTER_CONF);
+
+    // If currently in a sign and confidence collapses, release to idle quickly.
+    if (strcmp(stable_pred_label, "---") != 0 && raw_conf < EI_SIGN_EXIT_CONF) {
+        strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
+        stable_pred_conf = 0.0f;
+        strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+        pending_pred_count = 0;
+    }
+
+    if (strcmp(stable_pred_label, "---") == 0) {
+        // Idle → Sign requires confirmation frames
+        if (candidate_is_sign) {
+            if (strcmp(label, pending_pred_label) == 0) {
+                if (pending_pred_count < 255) pending_pred_count++;
+            } else {
+                strncpy(pending_pred_label, label, sizeof(pending_pred_label));
+                pending_pred_count = 1;
+            }
+
+            if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
+                strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
+                stable_pred_conf = raw_conf;
+            }
+        } else {
+            strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+            pending_pred_count = 0;
+        }
+    } else {
+        // Already in a sign
+        if (strcmp(label, stable_pred_label) == 0) {
+            // Same sign keeps lock with lower "stay" threshold
+            stable_pred_conf = raw_conf;
+            strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+            pending_pred_count = 0;
+        } else if (candidate_is_sign) {
+            // Sign → different sign requires both margin and confirmation
+            bool strong_switch = (raw_conf >= EI_SWITCH_HARD_CONF) ||
+                                 (raw_conf >= (stable_pred_conf + EI_SWITCH_MARGIN));
+            if (strong_switch) {
+                if (strcmp(label, pending_pred_label) == 0) {
+                    if (pending_pred_count < 255) pending_pred_count++;
+                } else {
+                    strncpy(pending_pred_label, label, sizeof(pending_pred_label));
+                    pending_pred_count = 1;
+                }
+
+                if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
+                    strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
+                    stable_pred_conf = raw_conf;
+                }
+            } else {
+                strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+                pending_pred_count = 0;
+            }
+        } else {
+            // Non-sign / weak confidence while in sign: do not jump to random sign.
+            // Release already handled by EI_SIGN_EXIT_CONF above.
+            strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+            pending_pred_count = 0;
+        }
+    }
+
+    if (strcmp(stable_pred_label, "---") == 0) {
         strncpy(gesture_text, "---", sizeof(gesture_text));
     } else {
         // Only update the display text if audio is NOT playing — prevents
         // the label from flickering to a new gesture mid-speech.
         if (!audio_is_playing()) {
-            strncpy(gesture_text, label, sizeof(gesture_text));
+            strncpy(gesture_text, stable_pred_label, sizeof(gesture_text));
         }
         // Still allow non-sign → idle transitions even during playback
     }
@@ -539,14 +668,27 @@ void loop() {
         sensors_read(sensor_data);
         sensor_module_process(sensor_data, processed_data);
 
-        // Push calibrated data into EI sliding window at 30 Hz
+        // Push raw data into EI sliding window at model rate (30 Hz)
         if (current_mode == MODE_PREDICT_LOCAL || current_mode == MODE_PREDICT_WEB) {
             if (now - last_ei_push >= EI_PUSH_INTERVAL_MS) {
                 last_ei_push = now;
                 sensor_module_ei_push(sensor_data);
             }
-            // Classify gesture when buffer is ready
-            classify_gesture();
+
+            // Adaptive fast mode: infer faster while hand is moving,
+            // then decay to slower cadence when idle.
+            if (prediction_motion_detected(processed_data)) {
+                last_motion_ms = now;
+            }
+            current_infer_interval_ms =
+                ((now - last_motion_ms) <= EI_FAST_MODE_HOLD_MS)
+                ? EI_INFER_INTERVAL_FAST_MS
+                : EI_INFER_INTERVAL_SLOW_MS;
+
+            if (now - last_ei_infer >= current_infer_interval_ms) {
+                last_ei_infer = now;
+                classify_gesture();
+            }
         }
     }
 
@@ -662,6 +804,7 @@ void loop() {
     if (power_usb_state_changed()) {
         bool charging = power_is_charging() || power_usb_connected();
         gui_set_charging(charging);
+        gui_update_charge_icon(power_charging_status_str());
         gui_set_battery(power_battery_percent());
         // Show full-screen charging popup for 5 seconds
         gui_show_charge_popup(charging, power_battery_percent());
@@ -671,6 +814,7 @@ void loop() {
         last_bat_read = now;
         gui_set_battery(power_battery_percent());
         gui_set_charging(power_is_charging() || power_usb_connected());
+        gui_update_charge_icon(power_charging_status_str());
     }
 
     // ── CPU usage tracking ─────────────────────────────────────────

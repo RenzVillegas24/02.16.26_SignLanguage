@@ -411,6 +411,18 @@ void gui_set_charging(bool charging) {
         lv_obj_add_flag(charge_label, LV_OBJ_FLAG_HIDDEN);
 }
 
+void gui_update_charge_icon(const char *status) {
+    if (!charge_label || !status) return;
+    
+    // Use LV_SYMBOL_CHARGE_FULL if charging status contains "Charge Termination", otherwise use LV_SYMBOL_CHARGE
+    if (strstr(status, "Charge Termination") != nullptr) {
+        lv_label_set_text(charge_label, LV_SYMBOL_CHARGE_FULL);
+    } else {
+        lv_label_set_text(charge_label, LV_SYMBOL_CHARGE);
+    }
+}
+
+
 void gui_show_web_qr(const char *url) {
     if (qr_web && url)
         lv_qrcode_update(qr_web, url, strlen(url));

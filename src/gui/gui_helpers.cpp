@@ -172,9 +172,12 @@ void build_status_bar() {
     lv_obj_align(bat_label, LV_ALIGN_RIGHT_MID, 0, 0);
 
     // Charging bolt indicator — centered in status bar, uses theme text color (white/black)
+    // custom_symbol covers U+E0B8 (LV_SYMBOL_CHARGE_FULL); fallback to montserrat_16
+    // for U+F0E1 (LV_SYMBOL_CHARGE) and any other built-in LVGL symbol.
+    custom_symbol.fallback = &lv_font_montserrat_16;
     charge_label = lv_label_create(stat_bar);
     lv_label_set_text(charge_label, LV_SYMBOL_CHARGE);
-    lv_obj_set_style_text_font(charge_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(charge_label, &custom_symbol, 0);
     lv_obj_set_style_text_color(charge_label, tc->hdr_text, 0);  // white (dark) or black (light)
     lv_obj_align(charge_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(charge_label, LV_OBJ_FLAG_HIDDEN);  // hidden by default

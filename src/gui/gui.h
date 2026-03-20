@@ -19,6 +19,7 @@ void gui_set_predict_confidence(float conf); // Update prediction confidence %
 void gui_set_predict_status(const char *text); // Update predict status text
 void gui_set_battery(int pct);         // Update battery indicator
 void gui_set_charging(bool charging);  // Show/hide charging bolt indicator
+void gui_update_charge_icon(const char *status);  // Update charge icon based on charging status string
 void gui_show_charge_popup(bool charging, int pct);  // Full-screen charging overlay (5 s auto-dismiss)
 void gui_hide_charge_popup();                         // Manually dismiss charging popup
 bool gui_charge_popup_visible();

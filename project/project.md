@@ -16,9 +16,9 @@
     * *MCU:* ESP32-S3 Dual-core 240MHz, 16MB Flash, 8MB PSRAM.
     * *Display:* 1.64" AMOLED, 280×456 pixels, QSPI Interface (Integrated).
     * *Touch:* FT3168 Capacitive Touch Controller (Integrated on I2C bus).
-    * *Battery Management:* Built-in LiPo charging circuit.
-    * *Battery Voltage Monitoring:* GPIO 4 (ADC1_CH3) - Internal connection.
-    * *Power Enable:* GPIO 38 is used as **power button input** (sleep/wake control via external momentary switch).
+    * *Battery Management:* **SY6970** Li-Ion charger IC (I2C, integrated on T-Display board) — provides battery voltage, charging current, input voltage, and charge status readings.
+    * *Battery Voltage Monitoring:* Via SY6970 I2C registers (accurate ±10 mV). GPIO 4 (ADC1_CH3) is an internal fallback connection.
+    * *Power Enable:* GPIO 2 is used as **power button input** (sleep/wake control via external momentary switch). GPIO 2 is the only RTC-domain-capable pin exposed for ext0 wakeup on this board.
     * *Antenna:* PCB Antenna + External Antenna Connector (3D Antenna default).
     * *Dimensions:* 42.0×28.0×11.0 mm (including display and components).
     * *Available ADC Pins:* GPIO 1, 2, 3, 5, 18 (5 total ADC-capable pins exposed).
@@ -26,9 +26,16 @@
 
 * **Multiplexer:** **CD74HC4067 (16-Channel Analog/Digital Multiplexer)**.
     * *Spec:* High-speed CMOS, 2V-6V operation.
-    * *Function:* Consolidates 16 analog inputs (5 Flex + up to 11 Hall sensors) into 1 ADC pin.
-    * *Reasoning:* Required because the T-Display has only 5 exposed ADC pins, and we need more than 5 analog sensors.
+    * *Function:* Consolidates 16 analog inputs (5 Flex + 5 Hall sensors on active channels) into 1 analog signal line read by the ADS1115.
+    * *Reasoning:* Required because the T-Display has only a few exposed ADC pins, and we need 10 analog sensor channels.
     * *Actual Dimensions:* 40.6×17.9×1.5 mm (breakout board). 40.6×17.9×3.5 mm (with components).
+
+* **External ADC:** **ADS1115 (16-bit I2C ADC)**.
+    * *Spec:* 16-bit resolution, 860 SPS max, 4-channel single-ended or 2-channel differential.
+    * *Function:* Reads the MUX SIG output (connected to ADS1115 A0) with much higher resolution and accuracy than the ESP32’s internal 12-bit ADC. Fall-back to GPIO 1 (internal ADC) if ADS1115 not detected.
+    * *I2C Address:* 0x48 (ADDR pin → GND).
+    * *Gain:* GAIN_ONE (±4.096 V range → 0–32767 raw units for 0–3.3V).
+    * *Sample Rate:* 860 SPS configured.
 
 * **IMU (Inertial Measurement Unit):** **MPU-6050 (GY-521 Breakout)**.
     * *Spec:* 3-Axis Gyroscope + 3-Axis Accelerometer.
@@ -80,15 +87,15 @@
     * *Charging:* Built-in charging circuit on T-Display board (USB-C).
     * *Voltage Monitoring:* GPIO 4 (internal ADC connection) - Display battery percentage on AMOLED.
 
-* **Power Control:** **Momentary Push Button on GPIO 38**.
-    * *Type:* Momentary tactile switch (NO - Normally Open), wired to GPIO 38.
-    * *Function:* Single power button (like a phone): short press to sleep, press to wake from deep sleep.
-    * *Connection:* One side to **GPIO 38**, other side to **GND**. Internal pull-up used.
-    * *Wake Source:* `esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, LOW)` for deep sleep wake.
-    * *Software Control:* Short press toggles sleep/wake. MPU6050 double-tap can also wake.
+* **Power Control:** **Momentary Push Button on GPIO 2**.
+    * *Type:* Momentary tactile switch (NO - Normally Open), wired to GPIO 2.
+    * *Function:* Single power button (like a phone): short press = action, long press = power menu, wake from deep/light sleep.
+    * *Connection:* One side to **GPIO 2**, other side to **GND**. Internal pull-up used.
+    * *Wake Source:* `esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0)` for both deep and light sleep wake. GPIO 2 is on the RTC domain and is the only pin that can reliably serve as ext0 wakeup on this board.
+    * *Software Control:* Short press = context action; long press = power menu dialog; used for both light sleep and deep sleep (shutdown) wake.
     * *Dimensions:* 6×6×5 mm (standard tactile switch).
 
-### **D. Interface & Hardware**
+### **D. Interface & Hardware**a
 
 * **Display:** **1.64" AMOLED Display (Integrated with T-Display S3)**.
     * *Spec:* 280×456 pixels, QSPI Interface (CO5300 Controller).
@@ -154,8 +161,8 @@ The central processing and control center. Houses all high-power components.
 * Speaker grill opening (approx 30×21 mm) on the bottom or side of the case.
 
 **Power Management Strategy:**
-* **Power Button:** GPIO 38 momentary switch triggers deep sleep.
-* **Button Sleep:** Press GPIO 38 button to enter deep sleep.
+* **Power Button:** GPIO 2 momentary switch — short press = context action, long press = power menu dialog.
+* **Button Sleep:** Long press GPIO 2 button → power menu → enter deep sleep (shutdown) or light sleep.
 * **Tap to Wake:** MPU6050 detects double-tap (secondary wake source).
 
 ---
@@ -213,51 +220,56 @@ The LILYGO T-Display S3 AMOLED uses **many pins for the integrated display and t
   - GPIO 10-17: QSPI Display interface and control.
 
 **Available Pins for External Use:**
-* **GPIO 1, 2, 3, 5:** ADC-capable (ADC1 channels).
+* **GPIO 1, 3, 5:** ADC-capable (ADC1 channels).
+* **GPIO 2:** Power button (RTC domain, ext0 wakeup source — not available for other use).
 * **GPIO 18:** ADC-capable (ADC2_CH7).
 * **GPIO 21, 40, 41, 42, 43, 45, 46, 47, 48:** Digital I/O.
 * **GPIO 0:** Boot button (can be used with caution).
-* **GPIO 4:** Battery voltage monitoring (internal connection).
-* **GPIO 38:** Power button input (momentary switch to GND, internal pull-up).
+* **GPIO 4:** Battery voltage monitoring (internal connection, fallback ADC).
+* **GPIO 38:** Available for general use.
 
 ### **A. The Power Circuit**
 
-**Power Button (GPIO 38):**
-* **GPIO 38** → Connected to a momentary tactile switch (other side to GND).
-* Short press triggers deep sleep; press again to wake via `esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, LOW)`.
-* Internal pull-up resistor used (`INPUT_PULLUP`).
+**Power Button (GPIO 2):**
+* **GPIO 2** → Connected to a momentary tactile switch (other side to GND).
+* Short press = action; long press = power menu. Wake from light or deep sleep via `esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0)`.
+* GPIO 2 is on the ESP32-S3 RTC domain and is the only exposed pin that supports ext0 wakeup reliably.
+* Internal pull-up + RTC pull-up used (`rtc_gpio_pullup_en()` before sleep).
 
-**Battery Management:**
-* **Built-in USB-C Charging Circuit** (no external switch needed).
-* **GPIO 4** → Battery voltage ADC (internal connection, read-only).
-* Display battery percentage on AMOLED screen.
+**Battery Management (SY6970 Charger IC):**
+* **SY6970** on I2C bus (address `0x6A`) provides real-time battery voltage (mV), system voltage, input voltage, charging current, charge status, and fault flags.
+* GPIO 4 (ADC1_CH3) is an internal backup battery ADC trace but primary data comes from SY6970 via I2C.
+* Display battery percentage, charging indicator, and USB connection status on AMOLED screen.
 
 **Sleep/Wake Control:**
-* **Momentary Button on GPIO 38** is the sole power control (like a phone button).
+* **Momentary Button on GPIO 2** — short press = context-sensitive action; long press = power menu (sleep/deep sleep/restart).
 * **Wake Sources:**
-  - Button press on GPIO 38 (ext0 wakeup).
+  - Button press on GPIO 2 (ext0 wakeup, RTC domain).
   - MPU6050 double-tap detection (optional secondary wake).
 
 **Power Code Example:**
 ```cpp
-#define PIN_POWER_BTN 38
+#define PIN_POWER_BTN 2
 
-void setup() {
-  pinMode(LCD_EN, OUTPUT);
-  digitalWrite(LCD_EN, HIGH);    // Enable display
-  
-  // Configure power button
+void power_init() {
   pinMode(PIN_POWER_BTN, INPUT_PULLUP);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, LOW);
 }
 
-void enterDeepSleep() {
-  gfx->Display_Brightness(0);
-  gfx->displayOff();
-  digitalWrite(LCD_EN, LOW);
+static void _arm_wakeup_gpio() {
+  const gpio_num_t pin = (gpio_num_t)PIN_POWER_BTN;
+  rtc_gpio_init(pin);
+  rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_en(pin);
+  rtc_gpio_pulldown_dis(pin);
+  esp_sleep_enable_ext0_wakeup(pin, 0);  // Wake on LOW (button press)
+}
+
+void power_deep_sleep() {
+  display_off();
+  _arm_wakeup_gpio();
+  gpio_deep_sleep_hold_en();
   esp_deep_sleep_start();
 }
-```
 
 ---
 
@@ -276,7 +288,7 @@ Digital audio from the T-Display to the Pixel 7 Pro speaker via MAX98357A amplif
 **Technical Notes:**
 * GPIOs 40-42 are high-speed digital pins suitable for I2S audio.
 * The T-Display has sufficient flash (16MB) for storing audio files.
-* Use SPIFFS or LittleFS to store `.wav` files for sign language audio playback.
+* Use LittleFS to store `.mp3` files for sign language audio playback (decoded in firmware via `minimp3`). File layout: `/<voice>/<label>.mp3`.
 
 **Code Example (I2S Configuration):**
 ```cpp
@@ -325,8 +337,10 @@ The T-Display S3 has a built-in I2C bus for the FT3168 touch controller. The MPU
 
 **I2C Addressing:**
 * **FT3168 Touch Controller:** 0x38 (fixed, internal to T-Display).
-* **MPU-6050 IMU:** 0x68 or 0x69 (configure via AD0 pin).
+* **MPU-6050 IMU:** 0x68 (AD0 = LOW).
   - **IMPORTANT:** Set MPU-6050 to address **0x68** (AD0 = LOW) to avoid conflict with touch controller.
+* **SY6970 Charger IC:** 0x6A (fixed, internal to T-Display).
+* **ADS1115 External ADC:** 0x48 (ADDR pin → GND).
 
 **Code Example (I2C Initialization):**
 ```cpp
@@ -359,23 +373,24 @@ void setup() {
 **Tap-to-Wake Feature:**
 * Configure MPU6050 motion detection interrupt.
 * Use GPIO 9 (TP_INT) or another available pin to detect tap events.
-* Double-tap triggers display wake (secondary to GPIO 38 button).
+* Double-tap triggers display wake (secondary to GPIO 2 button).
 
 ---
 
 ### **D. The Multiplexer Circuit (Sensor Aggregation)**
 
-Because the T-Display has only **5 exposed ADC pins** (GPIO 1, 2, 3, 5, 18) and we need **10+ analog sensors** (5 Flex + 5 Hall), we use the CD74HC4067 multiplexer.
+Because the T-Display has only a few exposed ADC pins and we need **10 analog sensor channels** (5 Flex + 5 Hall), we use the CD74HC4067 multiplexer. Its single output (SIG) is read by the **ADS1115 16-bit I2C ADC** on channel A0 (falls back to GPIO 1 internal ADC if ADS1115 is absent).
 
 **Multiplexer (CD74HC4067) Pin Connections:**
 
 | T-Display Pin | MUX Pin | Function | Notes |
-|---------------|---------|----------|-------|
+|---------------|---------|----------|---------|
 | **GPIO 21** | **S0** | Address Bit 0 (LSB) | Digital control |
 | **GPIO 47** | **S1** | Address Bit 1 | Digital control |
 | **GPIO 48** | **S2** | Address Bit 2 | Digital control |
 | **GPIO 45** | **S3** | Address Bit 3 (MSB) | Digital control |
-| **GPIO 1** | **SIG** | Analog Input (Common output) | ADC1_CH0 |
+| **GPIO 1** | **SIG** | Analog fallback (backup) | ADC1_CH0 — used only if ADS1115 absent |
+| **ADS1115 A0** | **SIG** | Analog Input (primary) | 16-bit I2C ADC, 860 SPS |
 | **3.3V** | **VCC** | Power supply | |
 | **GND** | **GND** | Ground reference | |
 | **GND** | **EN** | Enable (active LOW) | Tie to GND for always-on |
@@ -387,14 +402,17 @@ Because the T-Display has only **5 exposed ADC pins** (GPIO 1, 2, 3, 5, 18) and 
 | **C0** | Thumb Flex Sensor | Analog | Voltage Divider (Flex + 10kΩ pull-down) |
 | **C1** | Index Flex Sensor | Analog | Voltage Divider |
 | **C2** | Middle Flex Sensor | Analog | Voltage Divider |
-| **C3** | Ring Flex Sensor | Analog | Voltage Divider |
-| **C4** | Pinky Flex Sensor | Analog | Voltage Divider |
-| **C5** | Thumb Hall Sensor (SS49E) | Analog | Vout (linear output) |
-| **C6** | Index Hall Sensor (SS49E) | Analog | Vout |
-| **C7** | Middle Hall Sensor (SS49E) | Analog | Vout |
-| **C8** | Ring Hall Sensor (SS49E) | Analog | Vout |
-| **C9** | Pinky Hall Sensor (SS49E) | Analog | Vout |
-| **C10-C15** | RESERVED | — | Future expansion |
+| **C3** | *(RESERVED / unused)* | — | Was Ring Flex — now C6 |
+| **C4** | *(RESERVED / unused)* | — | Was Pinky Flex — now C7 |
+| **C5** | *(RESERVED / unused)* | — | Was Thumb Hall — now C8 |
+| **C6** | Ring Flex Sensor | Analog | Voltage Divider |
+| **C7** | Pinky Flex Sensor | Analog | Voltage Divider |
+| **C8** | Thumb Hall Sensor (SS49E) | Analog | Vout (linear output) |
+| **C9** | Index Hall Sensor (SS49E) | Analog | Vout |
+| **C10** | Middle Hall Sensor (SS49E) | Analog | Vout |
+| **C11** | Ring Hall Sensor (SS49E) | Analog | Vout |
+| **C12** | Pinky Hall Sensor (SS49E) | Analog | Vout |
+| **C13-C15** | RESERVED | — | Future expansion |
 
 **Code Example (Multiplexer Control):**
 ```cpp
@@ -402,7 +420,19 @@ Because the T-Display has only **5 exposed ADC pins** (GPIO 1, 2, 3, 5, 18) and 
 #define MUX_S1  47
 #define MUX_S2  48
 #define MUX_S3  45
-#define MUX_SIG 1   // ADC pin
+#define MUX_SIG 1   // ADC fallback (used only if ADS1115 absent)
+
+// Actual channel assignments (from config.h)
+#define MUX_CH_FLEX_THUMB   0
+#define MUX_CH_FLEX_INDEX   1
+#define MUX_CH_FLEX_MIDDLE  2
+#define MUX_CH_FLEX_RING    6
+#define MUX_CH_FLEX_PINKY   7
+#define MUX_CH_HALL_THUMB   8
+#define MUX_CH_HALL_INDEX   9
+#define MUX_CH_HALL_MIDDLE  10
+#define MUX_CH_HALL_RING    11
+#define MUX_CH_HALL_PINKY   12
 
 void selectMuxChannel(int channel) {
   digitalWrite(MUX_S0, (channel >> 0) & 0x01);
@@ -412,18 +442,12 @@ void selectMuxChannel(int channel) {
   delayMicroseconds(100); // Settling time
 }
 
+// Primary read via ADS1115 (16-bit, A0); falls back to analogRead(MUX_SIG)
 int readMuxChannel(int channel) {
   selectMuxChannel(channel);
-  return analogRead(MUX_SIG);
+  if (ads_ok) return ads.readADC_SingleEnded(0); // 0-32767
+  return analogRead(MUX_SIG);                    // 0-4095 fallback
 }
-
-void readAllSensors() {
-  for (int i = 0; i < 10; i++) {
-    int value = readMuxChannel(i);
-    Serial.printf("Channel %d: %d\n", i, value);
-  }
-}
-```
 
 ---
 
@@ -453,19 +477,19 @@ The control cable that carries all command and sensor signals between the wrist 
 
 | GPIO Pin | Connected Device | Function | Circuit Type | Notes |
 |----------|------------------|----------|--------------|-------|
-| **1** | CD74HC4067 | **Mux SIG** (Analog Input) | ADC1_CH0 | Main sensor reading pin |
-| **4** | Battery Monitor | **Battery Voltage ADC** | ADC1_CH3 | Internal connection (read-only) |
-| **6** | FT3168 + MPU6050 | **I2C SCL** (Clock Line) | I2C Bus | Shared touch + IMU |
-| **7** | FT3168 + MPU6050 | **I2C SDA** (Data Line) | I2C Bus | Shared touch + IMU |
+| **1** | CD74HC4067 | **Mux SIG** (Analog Fallback) | ADC1_CH0 | Backup only — ADS1115 A0 is primary |
+| **2** | Power Button | **Sleep/Wake Button** | Digital GPIO (RTC) | Momentary switch to GND; ext0 wakeup |
+| **4** | SY6970 / Battery | **Battery Voltage (fallback ADC)** | ADC1_CH3 | Primary: SY6970 I2C; GPIO 4 = internal trace |
+| **6** | FT3168 + MPU6050 + SY6970 + ADS1115 | **I2C SCL** (Clock Line) | I2C Bus | Shared 400 kHz bus |
+| **7** | FT3168 + MPU6050 + SY6970 + ADS1115 | **I2C SDA** (Data Line) | I2C Bus | Shared 400 kHz bus |
 | **8** | FT3168 | **Touch Reset** | Digital GPIO | Internal (do not use) |
 | **9** | FT3168 | **Touch Interrupt** | Digital GPIO | Internal (do not use) |
 | **10-17** | AMOLED Display | **QSPI Interface** | QSPI Bus | Internal (do not use) |
 | **16** | Display | **LCD Enable** | Digital GPIO | Display power control |
 | **21** | CD74HC4067 | **Mux S0** (Address Bit 0) | Digital GPIO | Multiplexer control |
-| **38** | Power Button | **Sleep/Wake Button** | Digital GPIO | Momentary switch to GND |
 | **40** | MAX98357A | **I2S BCLK** (Bit Clock) | I2S Interface | Audio clock |
 | **41** | MAX98357A | **I2S LRCK** (Frame Sync) | I2S Interface | Audio sync |
-| **42** | MAX98357A | **I2S DIN** (Serial Data) | I2S Interface | Audio data |
+| **42** | MAX98357A | **I2S DOUT** (Serial Data) | I2S Interface | Audio data out |
 | **45** | CD74HC4067 | **Mux S3** (Address Bit 3) | Digital GPIO | Multiplexer control |
 | **47** | CD74HC4067 | **Mux S1** (Address Bit 1) | Digital GPIO | Multiplexer control |
 | **48** | CD74HC4067 | **Mux S2** (Address Bit 2) | Digital GPIO | Multiplexer control |
@@ -473,13 +497,13 @@ The control cable that carries all command and sensor signals between the wrist 
 | **GND** | All Devices | Ground Reference | Ground Rail | System ground |
 
 **Pin Usage Summary:**
-- **Reserved (Internal):** GPIO 6-17 (Display, Touch, Control)
+- **Reserved (Internal):** GPIO 6-17 (Display, Touch, Control), GPIO 4 (battery trace)
 - **Multiplexer Control:** GPIO 21, 47, 48, 45 (4 pins)
-- **Analog Input:** GPIO 1 (1 pin via multiplexer)
+- **Analog Fallback:** GPIO 1 (MUX SIG backup, normally read by ADS1115 on I2C)
 - **I2S Audio:** GPIO 40, 41, 42 (3 pins)
-- **Power Button:** GPIO 38 (1 pin - sleep/wake)
-- **Battery Monitor:** GPIO 4 (1 pin - internal)
-- **Available for Future Use:** GPIO 0, 2, 3, 5, 18, 43, 46 (7 pins)
+- **Power Button:** GPIO 2 (1 pin — RTC domain, ext0 wakeup)
+- **I2C Bus Devices:** FT3168 (0x38), MPU6050 (0x68), SY6970 (0x6A), ADS1115 (0x48)
+- **Available for Future Use:** GPIO 0, 3, 5, 18, 38, 43, 46 (7 pins)
 
 ---
 
@@ -547,9 +571,9 @@ The control cable that carries all command and sensor signals between the wrist 
 1. Connect the LiPo battery JST connector to the T-Display's battery connector (if available) or solder directly to BAT+/BAT- pads.
 2. **No external power switch needed** - the board has built-in charging circuitry.
 3. Add a momentary push button:
-   - Connect one side to **GPIO 38**.
+   - Connect one side to **GPIO 2**.
    - Connect the other side to **GND**.
-   - This button will trigger sleep/wake functions (like a phone power button).
+   - This button will trigger sleep/wake functions (like a phone power button). GPIO 2 is in the RTC domain and is the designated ext0 wakeup pin.
 
 #### **Step 2E: Wire the Audio Amplifier**
 
@@ -586,7 +610,7 @@ The control cable that carries all command and sensor signals between the wrist 
 3. Upload minimal test code:
    ```cpp
    #include "pin_config.h"
-   #define PIN_POWER_BTN 38
+   #define PIN_POWER_BTN 2
    void setup() {
      pinMode(LCD_EN, OUTPUT);
      digitalWrite(LCD_EN, HIGH);  // Enable display
@@ -628,13 +652,13 @@ For each of the 5 fingers:
 
 1. **Flex Sensor Wiring:**
    - Create voltage dividers: Connect one end of flex sensor to 3.3V, other end to corresponding Mux channel AND a 10kΩ pull-down resistor to GND.
-   - Channels: C0=Thumb, C1=Index, C2=Middle, C3=Ring, C4=Pinky
+   - Channels: C0=Thumb, C1=Index, C2=Middle, C6=Ring, C7=Pinky
 
 2. **Hall Sensor Wiring (SS49E Linear):**
    - Connect **VCC** pin to 3.3V rail
    - Connect **GND** pin to ground rail
    - Connect **Vout** (middle pin) to corresponding Mux channel
-   - Channels: C5=Thumb, C6=Index, C7=Middle, C8=Ring, C9=Pinky
+   - Channels: C8=Thumb, C9=Index, C10=Middle, C11=Ring, C12=Pinky
 
 3. **Calibration Tip:** Use the AMOLED display to show real-time Hall sensor readings as bar graphs. This helps with magnet alignment and distance calibration.
 
@@ -654,8 +678,8 @@ For each of the 5 fingers:
 4. **Testing Checklist:**
    - Flex sensors: ~25kΩ flat, ~100kΩ bent
    - Hall sensors: ~2.5V at zero field, voltage change with magnet proximity
-   - I2C communication: MPU6050 responds at address 0x68
-   - Multiplexer: All 10 channels read valid ADC values
+   - I2C communication: MPU6050 @ 0x68, ADS1115 @ 0x48, SY6970 @ 0x6A, FT3168 @ 0x38
+   - Multiplexer: All 10 active channels (C0-C2, C6-C12) read valid ADS1115 values
 
 ---
 
@@ -691,15 +715,17 @@ For each of the 5 fingers:
 
 #### **Step 5A: Load Bootloader & Libraries**
 
-1. Install PlatformIO or Arduino IDE with ESP32-S3 board support.
+1. Install PlatformIO with ESP32-S3 board support.
 2. Install required libraries:
    - **Wire.h** (I2C, pre-installed)
-   - **Adafruit_MPU6050.h** (IMU motion and tap detection)
+   - **Adafruit_ADS1X15.h** (ADS1115 16-bit external ADC)
    - **lvgl.h** (LVGL 8.3.5 - GUI framework)
    - **Arduino_GFX_Library.h** (Display driver for AMOLED)
-   - **Arduino_DriveBus_Library.h** (I2C touch controller)
-   - **ESP32 I2S Audio** (for audio playback)
-   - **LittleFS** or **SPIFFS** (file system for audio storage)
+   - **Arduino_DriveBus_Library.h** (I2C touch controller + SY6970 charger)
+   - **LittleFS** (file system for MP3 audio storage)
+   - **minimp3** (single-header MP3 decoder, included in `src/minimp3.h`)
+
+   > **Note:** `Adafruit_MPU6050` is **not** used. MPU6050 is driven via direct low-level I2C register writes in `sensors.cpp` for a minimal footprint.
 
 3. Reference the LVGL example at `/examples/Lvgl/Lvgl.cpp` for display initialization.
 
@@ -779,47 +805,43 @@ Arduino_GFX *gfx = new Arduino_CO5300(bus, LCD_RST,
    - Fully bent: ~100kΩ resistance
    - Store min/max values in NVS (Non-Volatile Storage)
 
-#### **Step 5E: Power Management with Tap-to-Wake**
+#### **Step 5E: Power Management**
+
+Power management uses the SY6970 charger IC (read via I2C background task) and a direct I2C MPU6050 driver:
 
 ```cpp
-#include <Adafruit_MPU6050.h>
+#define PIN_POWER_BTN 2  // GPIO 2 — RTC domain, ext0 wakeup
 
-#define PIN_POWER_BTN 38
+// In sensors.cpp: MPU6050 driven via raw I2C register writes
+// (no Adafruit_MPU6050 library)
 
-Adafruit_MPU6050 mpu;
-
-void setupTapDetection() {
-  mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
-  mpu.setMotionDetectionThreshold(2);
-  mpu.setMotionDetectionDuration(20);
-  mpu.setInterruptPinLatch(true);
-  mpu.setMotionInterrupt(true);
-}
-
-void enterSleep() {
-  gfx->Display_Brightness(0);
-  gfx->displayOff();
-  digitalWrite(LCD_EN, LOW);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, LOW);  // Power button wake
-  esp_deep_sleep_start();
+// In power.cpp: arm wakeup before any sleep
+static void _arm_wakeup_gpio() {
+  const gpio_num_t pin = (gpio_num_t)PIN_POWER_BTN;
+  rtc_gpio_init(pin);
+  rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_en(pin);
+  rtc_gpio_pulldown_dis(pin);
+  esp_sleep_enable_ext0_wakeup(pin, 0);  // Wake on LOW
 }
 ```
 
 #### **Step 5F: Audio Integration**
 
-1. Store `.wav` files in LittleFS (16MB flash provides ample space):
+1. Store `.mp3` files in LittleFS under `/<voice>/<label>.mp3` (`/boy/<word>.mp3`, `/girl/<word>.mp3`):
    ```cpp
    #include <LittleFS.h>
    #include "driver/i2s.h"
    
-   void playAudio(const char* filename) {
-     File audioFile = LittleFS.open(filename, "r");
-     // Stream audio data to I2S
-     // Use I2S_NUM_0 with GPIO 40, 41, 42
-   }
+   // audio.cpp uses the minimp3 single-header decoder.
+   // Example call:
+   void audio_play_mp3(const char* filepath);
+   // e.g. audio_play_mp3("/boy/hello.mp3");
    ```
 
-2. Map gestures to audio files based on sign language recognition.
+2. Map gestures to audio files based on sign language recognition result label.
+3. Audio runs on a dedicated FreeRTOS task (Core 0, 48 KB stack) to avoid blocking the main loop.
+4. Sample rate: 44100 Hz, I2S port 0, DMA buf 8×1024.
 
 ---
 
@@ -830,33 +852,33 @@ void enterSleep() {
 ```
 Setup:
   1. Enable display (LCD_EN HIGH)
-  2. Configure GPIO 38 as power button input
+  2. Configure GPIO 2 as power button input (RTC domain)
   3. Initialize LVGL and AMOLED display
-  3. Initialize I2C bus (FT3168 touch + MPU6050 IMU)
-  4. Configure multiplexer pins
-  5. Initialize I2S audio system
-  6. Mount LittleFS filesystem
-  7. Load calibration data from NVS
-  8. Configure tap-to-wake on MPU6050
+  4. Initialize I2C bus (FT3168 touch + MPU6050 IMU + SY6970 charger + ADS1115 ADC) at 400 kHz
+  5. Configure multiplexer pins (S0=GPIO21, S1=47, S2=48, S3=45)
+  6. Initialize I2S audio system (BCLK=40, LRCK=41, DOUT=42)
+  7. Mount LittleFS filesystem (MP3 files in /<voice>/<label>.mp3)
+  8. Load calibration data from NVS
+  9. Start sensor FreeRTOS task (Core 0, 30 Hz)
+ 10. Start SY6970 charger read task (Core 0, 2 Hz)
+ 11. Start audio FreeRTOS task (Core 0, 48 KB stack)
 
 Loop:
   1. Check for touch input (LVGL handles this automatically)
-  2. Read all 10 Mux channels (C0–C9) for flex & Hall sensors
-  3. Query MPU6050 for orientation (pitch, roll, yaw) and tap events
-  4. Process hybrid gesture logic:
-     - Hall sensor reading indicates magnetic proximity (linear, not binary)
-     - Flex sensor reading indicates finger bend degree
-     - Combine with IMU orientation for context (palm up/down)
+  2. Sensor task reads all 10 channels via MUX + ADS1115 (C0-C2 Flex, C6-C7 Flex, C8-C12 Hall)
+  3. Sensor task queries MPU6050 registers for acceleration and gyro (pitch, roll, yaw)
+  4. Process Edge Impulse inference on combined feature vector (18 features: 5 flex + 5 hall + 3 accel + 3 gyro + pitch + roll)
   5. Update LVGL display with:
      - Current sensor readings (visualization bars)
-     - Recognized gesture name
-     - Battery percentage
-     - System status
-  6. If gesture matches dictionary → Play audio from LittleFS
+     - Recognized gesture name and confidence
+     - Battery percentage + charging status (from SY6970)
+     - System status / mode
+  6. If gesture recognized with sufficient confidence → play MP3 from LittleFS
   7. Handle power management:
-     - Auto-sleep after configurable timeout
-     - Wake on GPIO 38 button press or double-tap
-  8. Repeat with ~50-100ms cycle time (balance responsiveness vs. power)
+     - Auto-sleep after configurable timeout (60 s default)
+     - Short press GPIO 2 = context action; long press = power menu
+     - Wake on GPIO 2 button press (ext0) or double-tap
+  8. Repeat at ~33 ms cycle time (30 Hz sensor + UI pacing)
 ```
 
 ### **Gesture Recognition Hierarchy**
@@ -937,20 +959,20 @@ Design a multi-screen LVGL interface:
 
 ### **Pre-Flight Checklist**
 
-- [ ] **GPIO 38 power button** triggers deep sleep and wakes correctly.
+- [ ] **GPIO 2 power button** triggers light sleep / deep sleep and wakes correctly.
 - [ ] All solder joints inspected under magnification.
 - [ ] Continuity verified on power rails (3.3V, GND, BAT).
 - [ ] USB-C charging tested with multimeter (no shorts, correct polarity).
 - [ ] AMOLED display shows test pattern (verify QSPI communication).
 - [ ] FT3168 touch controller responds to touch input.
-- [ ] MPU-6050 responds at I2C address 0x68 (not conflicting with FT3168 at 0x38).
-- [ ] All 5 flex sensors read within expected ADC range (flat vs bent).
-- [ ] All 5 SS49E Hall sensors show ~2.5V baseline, voltage changes with magnet proximity.
-- [ ] Multiplexer correctly switches between all 10 channels.
-- [ ] Audio amplifier plays test tone via GPIO 40-42 I2S pins.
-- [ ] Battery voltage readable on GPIO 4 (internal ADC).
-- [ ] Sleep/wake button on GPIO 38 triggers deep sleep correctly.
-- [ ] MPU6050 tap detection functional.
+- [ ] MPU-6050 responds at I2C address 0x68 (AD0 = LOW).
+- [ ] ADS1115 responds at I2C address 0x48.
+- [ ] SY6970 charger responds at I2C address 0x6A and reports battery voltage.
+- [ ] All 5 flex sensors read within expected ADS1115 range (flat vs bent; C0-C2, C6-C7).
+- [ ] All 5 SS49E Hall sensors show ~mid-scale baseline at zero field (C8-C12).
+- [ ] Multiplexer correctly switches between all 10 active channels.
+- [ ] Audio amplifier plays test MP3 via GPIO 40-42 I2S pins.
+- [ ] Edge Impulse model loaded and inference returns labels.
 
 ### **Common Issues & Solutions**
 
@@ -959,13 +981,15 @@ Design a multi-screen LVGL interface:
 | **Display blank** | LCD_EN not set HIGH | Add `pinMode(LCD_EN, OUTPUT); digitalWrite(LCD_EN, HIGH);` in setup() |
 | **Touch not working** | I2C address conflict or wiring | Verify FT3168 at 0x38, MPU6050 at 0x68; check GPIO 6/7 connections |
 | **MPU6050 not detected** | I2C address conflict | Set MPU6050 AD0 pin LOW for address 0x68 |
+| **ADS1115 not detected** | Wrong ADDR pin or wiring | Ensure ADDR → GND for 0x48; check I2C bus |
 | **Flex sensors unreliable** | Poor solder joint or incorrect divider | Re-solder; verify 10kΩ pull-down resistor |
-| **Hall sensors always at 2.5V** | No magnet or wrong polarity | Test with magnet; try flipping magnet orientation |
+| **Hall sensors always mid-scale** | No magnet or wrong polarity | Test with magnet; try flipping magnet orientation |
 | **Hall sensor drift** | Temperature or EMI | Add 100nF capacitor near sensor; calibrate regularly |
 | **Multiplexer reads wrong** | Insufficient settling time | Increase `delayMicroseconds()` to 150-200µs |
 | **Audio distorted** | I2S timing or clipping | Check GPIO 40-42 connections; reduce volume in code |
-| **Battery drains fast** | Display always on | Implement tap-to-wake; reduce screen brightness; use light sleep |
-| **System won't wake** | Wake source not configured | Enable ext0 wakeup on GPIO 38 or MPU6050 wake-on-motion |
+| **Audio file not found** | Wrong path / missing file | Files must be `/<voice>/<label>.mp3` in LittleFS root |
+| **Battery drains fast** | Display always on | Implement auto-sleep; reduce screen brightness; use light sleep |
+| **System won’t wake** | Wake source not configured | Enable ext0 wakeup on GPIO 2 with RTC domain init |
 
 ### **Calibration Procedure**
 
@@ -1015,7 +1039,7 @@ With C10–C15 channels reserved on the Multiplexer, the following additions are
 | **v1.0** | TBD | Initial concept (flex sensors only). |
 | **v2.0** | TBD | Added Hall sensors, IMU, OLED, dual-hub architecture. |
 | **v3.0** | 2026-02-11 | Implemented analog resistor ladder for navigation; optimized I2S audio pins; finalized pin mapping; detailed assembly strategy. |
-| **v4.0** | 2026-02-16 | **Major Hardware Migration:** Migrated from Seeed XIAO ESP32-S3 to **LILYGO T-Display S3 AMOLED 1.64**. Removed 5-way navigation switch and resistor ladder (replaced with touch display). Updated to **SS49E linear Hall sensors** for analog magnetic field measurement. Implemented **LVGL 8.3.5** GUI framework. Added magnetic field visualization on AMOLED display. Implemented **Tap-to-Wake** power management with MPU6050. Changed power control from latching switch to momentary button with software sleep control. Updated pin mappings for T-Display GPIO constraints. Added battery monitoring via internal GPIO 4 connection. Enhanced calibration procedures with real-time visual feedback. |
+| **v4.0** | 2026-02-16 | **Major Hardware Migration:** Migrated from Seeed XIAO ESP32-S3 to **LILYGO T-Display S3 AMOLED 1.64**. Removed 5-way navigation switch and resistor ladder (replaced with touch display). Updated to **SS49E linear Hall sensors** for analog magnetic field measurement. Implemented **LVGL 8.3.5** GUI framework. Added magnetic field visualization on AMOLED display. Implemented auto-sleep / lock-screen power management; power button moved to **GPIO 2** (RTC domain). Changed power control from latching switch to momentary button (short/long press). Added **SY6970 charger IC** I2C integration for accurate battery monitoring. Added **ADS1115 16-bit external ADC** for high-resolution sensor reading. Updated multiplexer channel assignments (Ring Flex=C6, Pinky Flex=C7, Hall on C8-C12). Audio updated to **MP3** playback via `minimp3` decoder stored in LittleFS. Added Edge Impulse on-device inference for gesture recognition. |
 
 ---
 
