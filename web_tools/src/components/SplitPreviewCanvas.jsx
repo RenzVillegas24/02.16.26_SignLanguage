@@ -8,9 +8,10 @@ const SENSOR_GROUPS_COLOR = {
 };
 
 // ─── EI-style combined waveform with segment boxes ─────────────────────────
-function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, padding, onToggleRemove, activeSensors, height }) {
+function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, padding, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, activeSensors, height }) {
   const ref = useRef();
   const [hovered, setHovered] = useState(null);
+  const [menu, setMenu] = useState(null);
   const N = values.length;
 
   const allCuts = useMemo(() => [0, ...cutPoints, N].sort((a, b) => a - b), [cutPoints, N]);
@@ -81,14 +82,21 @@ function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegmen
 
       // Padding shading (show where padding would be added)
       if (!removed && padding) {
-        const pMin = Math.max(0, Number(padding.min) || 0);
-        const pMax = Math.max(0, Number(padding.max) || 0);
+        const pMin = Number(padding.min) || 0;
+        const pMax = Number(padding.max) || 0;
         const avgPad = (pMin + pMax) / 2;
-        const padPts = Math.max(0, padding.unit === 'ms' ? avgPad / interval_ms : avgPad);
-        const padW = (padPts / N) * (W - LPAD);
-        ctx.fillStyle = '#f59e0b18';
-        ctx.fillRect(x1, 0, padW, H - 18);
-        ctx.fillRect(x2 - padW, 0, padW, H - 18);
+        const padPts = padding.unit === 'ms' ? avgPad / interval_ms : avgPad;
+        const padW = Math.abs((padPts / N) * (W - LPAD));
+        if (padPts >= 0) {
+          ctx.fillStyle = '#f59e0b18';
+          ctx.fillRect(x1, 0, padW, H - 18);
+          ctx.fillRect(x2 - padW, 0, padW, H - 18);
+        } else {
+          // Negative padding (shrinks the kept segment, show red where it cuts)
+          ctx.fillStyle = '#ef444444';
+          ctx.fillRect(x1, 0, padW, H - 18);
+          ctx.fillRect(x2 - padW, 0, padW, H - 18);
+        }
       }
 
       // Segment background
@@ -130,32 +138,32 @@ function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegmen
     });
 
     // Hover pill tooltip
-    if (hovered !== null) {
+    if (hovered !== null && !menu) {
       const seg = segments[hovered];
       if (seg) {
         const x1 = LPAD + (seg.start / N) * (W - LPAD);
         const x2 = LPAD + (seg.end   / N) * (W - LPAD);
         const cx = (x1 + x2) / 2;
         const removed = removedSegments.has(hovered);
-        const lbl = removed ? '＋ Add back' : '✕ Remove';
-        ctx.font = 'bold 10px monospace';
-        const tw = ctx.measureText(lbl).width + 18;
+        const lbl = removed ? '＋ Add back (Ctrl for more)' : '✕ Remove (Ctrl for more)';
+        ctx.font = 'bold 9px monospace';
+        const tw = ctx.measureText(lbl).width + 16;
         const tx = Math.min(Math.max(cx - tw / 2, LPAD + 2), W - tw - 2);
-        ctx.fillStyle = removed ? '#065f46' : '#dc2626';
+        ctx.fillStyle = removed ? '#065f46ee' : '#dc2626ee';
         ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(tx, 5, tw, 20, 4);
-        else ctx.rect(tx, 5, tw, 20);
+        if (ctx.roundRect) ctx.roundRect(tx, 5, tw, 18, 4);
+        else ctx.rect(tx, 5, tw, 18);
         ctx.fill();
         ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-        ctx.fillText(lbl, tx + tw / 2, 19);
+        ctx.fillText(lbl, tx + tw / 2, 17);
         // Arrow
         ctx.beginPath();
-        ctx.moveTo(cx - 5, 25); ctx.lineTo(cx + 5, 25); ctx.lineTo(cx, 31);
-        ctx.fillStyle = removed ? '#065f46' : '#dc2626';
+        ctx.moveTo(cx - 5, 23); ctx.lineTo(cx + 5, 23); ctx.lineTo(cx, 28);
+        ctx.fillStyle = removed ? '#065f46ee' : '#dc2626ee';
         ctx.fill();
       }
     }
-  }, [values, sensors, activeSensors, cutPoints, removedSegments, hovered, N, interval_ms, segments, padding]);
+  }, [values, sensors, activeSensors, cutPoints, removedSegments, hovered, menu, N, interval_ms, segments, padding]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -164,23 +172,83 @@ function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegmen
     return (e.clientX - r.left) * (c.width / r.width);
   };
 
+  const closeMenu = () => setMenu(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const clickOut = () => closeMenu();
+    window.addEventListener('click', clickOut);
+    return () => window.removeEventListener('click', clickOut);
+  }, [menu]);
+
   return (
-    <div style={{ userSelect: 'none' }}>
+    <div style={{ userSelect: 'none', position: 'relative' }}>
       <canvas ref={ref} width={900} height={height}
         style={{ width: '100%', height, borderRadius: 8, display: 'block', cursor: 'pointer' }}
-        onMouseMove={e => setHovered(getSegAt(evX(e), ref.current.width))}
+        onMouseMove={e => { if (!menu) setHovered(getSegAt(evX(e), ref.current.width)); }}
         onMouseLeave={() => setHovered(null)}
-        onClick={e => { const seg = getSegAt(evX(e), ref.current.width); if (seg !== null) onToggleRemove(seg); }}
+        onClick={e => {
+          e.stopPropagation();
+          const seg = getSegAt(evX(e), ref.current.width);
+          if (seg === null) { closeMenu(); return; }
+          if (e.ctrlKey || e.metaKey) {
+            setMenu({ x: e.nativeEvent.offsetX || e.clientX, y: e.nativeEvent.offsetY || e.clientY, seg });
+          } else {
+            closeMenu();
+            onToggleRemove(seg);
+          }
+        }}
       />
+      {menu && (
+        <div onClick={e => e.stopPropagation()} style={{
+          position: 'absolute', top: Math.min(menu.y, height - 80), left: Math.min(menu.x, 800),
+          background: '#0a1628', border: '1px solid #3b82f6', borderRadius: 6,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.8)', zIndex: 50, padding: 5, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 140
+        }}>
+          <div style={{ fontSize: 9, color: '#64748b', padding: '2px 6px 4px', borderBottom: '1px solid #1e293b', marginBottom: 2 }}>
+            Segment {menu.seg + 1} Options
+          </div>
+          <button onClick={() => { onToggleRemove(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#f1f5f9', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>
+            {removedSegments.has(menu.seg) ? '＋ Include Segment' : '✕ Exclude Segment'}
+          </button>
+          {!removedSegments.has(menu.seg) && (
+            <>
+              {(() => {
+                const seg = segments[menu.seg];
+                if (!seg) return null;
+                const mid = Math.round((seg.start + seg.end) / 2);
+                const canSplit = mid > seg.start && mid < seg.end;
+                if (!canSplit) return null;
+                return (
+                  <button onClick={() => { onSplitSegment?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#a78bfa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>
+                    ✂ Split Segment
+                  </button>
+                );
+              })()}
+              {menu.seg > 0 && <button onClick={() => { onCombineLeft?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>⬱ Combine with Left</button>}
+              {menu.seg < cutPoints.length && <button onClick={() => { onCombineRight?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>⇲ Combine with Right</button>}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Per-channel overlay strips (normalized) in split view ─────────────────
-function OverlayStripCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, activeSensors, height }) {
+function OverlayStripCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, activeSensors, height }) {
   const ref = useRef();
+  const [hovered, setHovered] = useState(null);
+  const [menu, setMenu] = useState(null);
   const N = values.length;
   const allCuts = useMemo(() => [0, ...cutPoints, N].sort((a, b) => a - b), [cutPoints, N]);
+  const segments = useMemo(() => allCuts.slice(0, -1).map((s, i) => ({ start: s, end: allCuts[i + 1], idx: i })), [allCuts]);
+
+  const getSegAt = useCallback((x, W) => {
+    const pct = x / W;
+    const ptIdx = Math.round(pct * (N - 1));
+    return segments.find(s => ptIdx >= s.start && ptIdx < s.end)?.idx ?? null;
+  }, [segments, N]);
 
   useEffect(() => {
     const c = ref.current; if (!c) return;
@@ -191,11 +259,14 @@ function OverlayStripCanvas({ values, sensors, interval_ms, cutPoints, removedSe
     allCuts.slice(0, -1).forEach((start, i) => {
       const end = allCuts[i + 1];
       const x1 = (start / N) * W, x2 = (end / N) * W;
+      const isHov = hovered === i;
       if (removedSegments.has(i)) {
         ctx.fillStyle = '#450a0a33'; ctx.fillRect(x1, 0, x2 - x1, H);
+      } else if (isHov) {
+        ctx.fillStyle = '#1d4ed822'; ctx.fillRect(x1, 0, x2 - x1, H);
       }
-      ctx.strokeStyle = removedSegments.has(i) ? '#7f1d1daa' : '#ffffff33';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = removedSegments.has(i) ? '#7f1d1daa' : isHov ? '#3b82f6' : '#ffffff33';
+      ctx.lineWidth = isHov ? 1.6 : 1;
       ctx.strokeRect(x1 + 0.5, 1, x2 - x1 - 1, H - 2);
     });
     // Channels (each normalized to its own range)
@@ -213,13 +284,81 @@ function OverlayStripCanvas({ values, sensors, interval_ms, cutPoints, removedSe
       });
       ctx.stroke();
     });
-  }, [values, sensors, activeSensors, allCuts, removedSegments, N]);
+  }, [values, sensors, activeSensors, allCuts, removedSegments, hovered, N]);
 
-  return <canvas ref={ref} width={900} height={height} style={{ width: '100%', height, borderRadius: 8, display: 'block' }} />;
+  const evX = e => {
+    const c = ref.current, r = c.getBoundingClientRect();
+    return (e.clientX - r.left) * (c.width / r.width);
+  };
+
+  const closeMenu = () => setMenu(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const clickOut = () => closeMenu();
+    window.addEventListener('click', clickOut);
+    return () => window.removeEventListener('click', clickOut);
+  }, [menu]);
+
+  return (
+    <div style={{ userSelect: 'none', position: 'relative' }}>
+      <canvas
+        ref={ref}
+        width={900}
+        height={height}
+        style={{ width: '100%', height, borderRadius: 8, display: 'block', cursor: 'pointer' }}
+        onMouseMove={e => { if (!menu) setHovered(getSegAt(evX(e), ref.current.width)); }}
+        onMouseLeave={() => setHovered(null)}
+        onClick={e => {
+          e.stopPropagation();
+          const seg = getSegAt(evX(e), ref.current.width);
+          if (seg === null) { closeMenu(); return; }
+          if (e.ctrlKey || e.metaKey) {
+            setMenu({ x: e.nativeEvent.offsetX || e.clientX, y: e.nativeEvent.offsetY || e.clientY, seg });
+          } else {
+            closeMenu();
+            onToggleRemove(seg);
+          }
+        }}
+      />
+      {menu && (
+        <div onClick={e => e.stopPropagation()} style={{
+          position: 'absolute', top: Math.min(menu.y, height - 80), left: Math.min(menu.x, 800),
+          background: '#0a1628', border: '1px solid #3b82f6', borderRadius: 6,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.8)', zIndex: 50, padding: 5, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 140
+        }}>
+          <div style={{ fontSize: 9, color: '#64748b', padding: '2px 6px 4px', borderBottom: '1px solid #1e293b', marginBottom: 2 }}>
+            Segment {menu.seg + 1} Options
+          </div>
+          <button onClick={() => { onToggleRemove(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#f1f5f9', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>
+            {removedSegments.has(menu.seg) ? '＋ Include Segment' : '✕ Exclude Segment'}
+          </button>
+          {!removedSegments.has(menu.seg) && (
+            <>
+              {(() => {
+                const seg = segments[menu.seg];
+                if (!seg) return null;
+                const mid = Math.round((seg.start + seg.end) / 2);
+                const canSplit = mid > seg.start && mid < seg.end;
+                if (!canSplit) return null;
+                return (
+                  <button onClick={() => { onSplitSegment?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#a78bfa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>
+                    ✂ Split Segment
+                  </button>
+                );
+              })()}
+              {menu.seg > 0 && <button onClick={() => { onCombineLeft?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>⬱ Combine with Left</button>}
+              {menu.seg < cutPoints.length && <button onClick={() => { onCombineRight?.(menu.seg); closeMenu(); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', textAlign: 'left', padding: '6px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 4 }}>⇲ Combine with Right</button>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Main exported component ───────────────────────────────────────────────
-export default function SplitPreviewCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, onToggleRemove, activeSensors, padding, height = 240 }) {
+export default function SplitPreviewCanvas({ values, sensors, interval_ms, cutPoints, removedSegments, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, activeSensors, padding, height = 240 }) {
   const [viewMode, setViewMode] = useState('combined'); // 'combined' | 'overlay'
   const N = values.length;
   const keptCount = useMemo(() => {
@@ -248,13 +387,20 @@ export default function SplitPreviewCanvas({ values, sensors, interval_ms, cutPo
         <CombinedCanvas
           values={values} sensors={sensors} interval_ms={interval_ms}
           cutPoints={cutPoints} removedSegments={removedSegments} padding={padding}
-          onToggleRemove={onToggleRemove} activeSensors={activeSensors} height={height}
+          onToggleRemove={onToggleRemove} 
+          onCombineLeft={onCombineLeft} onCombineRight={onCombineRight}
+          onSplitSegment={onSplitSegment}
+          activeSensors={activeSensors} height={height}
         />
       )}
       {viewMode === 'overlay' && (
         <OverlayStripCanvas
           values={values} sensors={sensors} interval_ms={interval_ms}
           cutPoints={cutPoints} removedSegments={removedSegments}
+          onToggleRemove={onToggleRemove}
+          onCombineLeft={onCombineLeft}
+          onCombineRight={onCombineRight}
+          onSplitSegment={onSplitSegment}
           activeSensors={activeSensors} height={height}
         />
       )}

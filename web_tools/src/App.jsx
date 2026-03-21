@@ -8,6 +8,7 @@ import SplitModal from './components/SplitModal';
 import LabelsModal from './components/LabelsModal';
 import WaveformViewer from './components/WaveformViewer';
 import SampleCard from './components/SampleCard';
+import SplitHighlightsViewer from './components/SplitHighlightsViewer';
 
 // ─── ZIP loader ────────────────────────────────────────────────────────────
 async function loadZip(file) {
@@ -101,6 +102,7 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sidebarViewMode, setSidebarViewMode] = useState('list'); // 'list' | 'grid'
+  const [splitHighlightsByBase, setSplitHighlightsByBase] = useState({});
 
   const fileRef = useRef();
   const zipRef = useRef();
@@ -140,6 +142,7 @@ export default function App() {
 
   const selectedSamples = useMemo(() => samples.filter(s => selectedIds.has(s.id)), [samples, selectedIds]);
   const activeSample = useMemo(() => samples.find(s => s.id === activeId) || null, [samples, activeId]);
+  const samplesById = useMemo(() => new Map(samples.map(s => [s.id, s])), [samples]);
 
   const groupedByLabel = useMemo(() => {
     const m = {};
@@ -235,33 +238,165 @@ export default function App() {
     showToast(removed > 0 ? `Removed ${removed} duplicate${removed !== 1 ? 's' : ''}` : 'No duplicates found', removed > 0 ? 'success' : 'info');
   };
 
-  const splitDo = (sample, parts, partLabels) => {
-    const ns = parts.map((values, i) => ({ ...sample, id: uid(), label: partLabels[i] !== undefined && partLabels[i] !== '' ? partLabels[i] : sample.label, filename: `${sample.label}_part${i + 1}.json`, values, duration_ms: values.length * sample.interval_ms, hash: simpleHash(values), sampleName: '' }));
-    setSamples(p => [...p.filter(s => s.id !== sample.id), ...ns]);
-    setSelectedIds(new Set()); setActiveId(ns[0].id);
-    showToast(`Split → ${parts.length} samples`, 'success');
+  const splitDo = (sample, parts, partLabels, meta = {}) => {
+    const ns = parts.map((values, i) => {
+      const seg = meta.segments?.[i] || null;
+      return {
+        ...sample,
+        id: uid(),
+        label: partLabels[i] !== undefined && partLabels[i] !== '' ? partLabels[i] : sample.label,
+        filename: `${sample.label}_part${i + 1}.json`,
+        values,
+        duration_ms: values.length * sample.interval_ms,
+        hash: simpleHash(values),
+        sampleName: sample.sampleName ? `${sample.sampleName}.part${i + 1}` : `part${i + 1}`,
+        splitBaseId: sample.id,
+        splitPartIndex: i + 1,
+        splitRange: seg ? { start: seg.start, end: seg.end } : null,
+      };
+    });
+    setSamples(p => [...p, ...ns]);
+    setSelectedIds(new Set(ns.map(s => s.id)));
+    setActiveId(sample.id);
+
+    if (meta?.segments?.length) {
+      setSplitHighlightsByBase(prev => ({
+        ...prev,
+        [sample.id]: {
+          baseId: sample.id,
+          baseLabel: sample.label,
+          createdAt: Date.now(),
+          segments: meta.segments.map((seg, i) => ({
+            ...seg,
+            label: ns[i]?.label || sample.label,
+            filename: ns[i]?.filename || `${sample.label}_part${i + 1}.json`,
+            sampleId: ns[i]?.id,
+          })),
+        },
+      }));
+    }
+
+    showToast(`Split → ${parts.length} samples (base retained)`, 'success');
   };
 
   const batchSplitDo = (results, partLabels) => {
     const allNew = [];
-    const oldIds = new Set(results.map(r => r.sample.id));
+    const newHighlights = {};
     results.forEach(r => {
-      if (r.parts.length < 2) { allNew.push(r.sample); return; }
+      if (r.parts.length < 2) { return; }
       r.parts.forEach((values, i) => {
-        allNew.push({ ...r.sample, id: uid(), label: r.sample.label, filename: `${r.sample.label}_part${i + 1}.json`, values, duration_ms: values.length * r.sample.interval_ms, hash: simpleHash(values), sampleName: '' });
+        const seg = r.meta?.segments?.[i] || null;
+        allNew.push({
+          ...r.sample,
+          id: uid(),
+          label: partLabels?.[i] !== undefined && partLabels?.[i] !== '' ? partLabels[i] : r.sample.label,
+          filename: `${r.sample.label}_part${i + 1}.json`,
+          values,
+          duration_ms: values.length * r.sample.interval_ms,
+          hash: simpleHash(values),
+          sampleName: r.sample.sampleName ? `${r.sample.sampleName}.part${i + 1}` : `part${i + 1}`,
+          splitBaseId: r.sample.id,
+          splitPartIndex: i + 1,
+          splitRange: seg ? { start: seg.start, end: seg.end } : null,
+        });
       });
+
+      if (r.meta?.segments?.length) {
+        newHighlights[r.sample.id] = {
+          baseId: r.sample.id,
+          baseLabel: r.sample.label,
+          createdAt: Date.now(),
+          segments: r.meta.segments.map((seg, i) => {
+            const created = allNew[allNew.length - r.parts.length + i];
+            return {
+              ...seg,
+              label: created?.label || r.sample.label,
+              filename: created?.filename || `${r.sample.label}_part${i + 1}.json`,
+              sampleId: created?.id,
+            };
+          }),
+        };
+      }
     });
-    setSamples(p => [...p.filter(s => !oldIds.has(s.id)), ...allNew]);
-    setSelectedIds(new Set()); if (allNew.length) setActiveId(allNew[0].id);
-    showToast(`Batch split → ${allNew.length} samples`, 'success');
+    setSamples(p => [...p, ...allNew]);
+    if (Object.keys(newHighlights).length) {
+      setSplitHighlightsByBase(prev => ({ ...prev, ...newHighlights }));
+    }
+    setSelectedIds(new Set(allNew.map(s => s.id)));
+    if (results.length) setActiveId(results[0].sample.id);
+    showToast(`Batch split → ${allNew.length} samples (bases retained)`, 'success');
   };
 
-  const exportSelected = () => {
+  const exportSelected = async () => {
     const toExport = selectedSamples.filter(s => !s.fromLabels && s.values.length > 0);
     if (!toExport.length) { showToast('No exportable samples selected', 'error'); return; }
-    toExport.forEach(s => downloadJSON(buildEIJson(s), s.filename));
-    showToast(`Exported ${toExport.length} file${toExport.length !== 1 ? 's' : ''}`, 'success');
+
+    const zip = new JSZip();
+    const usedPaths = new Set();
+    const normalize = (name) => {
+      const base = String(name || 'sample.json').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
+      return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
+    };
+
+    const manifestFiles = toExport.map((s, i) => {
+      const category = s.category === 'testing' ? 'testing' : 'training';
+      const baseName = normalize(s.filename || `${s.label || 'sample'}_${s.id || i + 1}.json`);
+      let finalName = baseName;
+      let k = 2;
+      while (usedPaths.has(`${category}/${finalName}`)) {
+        finalName = baseName.replace(/\.json$/i, `_${k}.json`);
+        k++;
+      }
+      const relPath = `${category}/${finalName}`;
+      usedPaths.add(relPath);
+
+      zip.file(relPath, JSON.stringify(buildEIJson(s), null, 2));
+
+      return {
+        path: relPath,
+        category,
+        name: s.sampleName || finalName.replace(/\.json$/i, ''),
+        label: s.label,
+        enabled: s.enabled !== false,
+        length: s.values.length,
+      };
+    });
+
+    const labelsObj = {
+      version: 1,
+      files: manifestFiles.map(f => ({
+        path: f.path,
+        name: f.name,
+        category: f.category,
+        label: { type: 'label', label: f.label },
+        enabled: f.enabled,
+        length: f.length,
+      })),
+    };
+
+    zip.file('info.labels', JSON.stringify(labelsObj, null, 2));
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `ei_export_${stamp}.zip`,
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+
+    showToast(`Exported ZIP with ${toExport.length} sample${toExport.length !== 1 ? 's' : ''} + info.labels`, 'success');
   };
+
+  const activeBaseId = activeSample ? (activeSample.splitBaseId || activeSample.id) : null;
+  const activeBaseSample = activeBaseId ? samplesById.get(activeBaseId) : null;
+  const activeSplitMeta = activeBaseId ? splitHighlightsByBase[activeBaseId] : null;
+  const splitPreferredSensor = useMemo(() => {
+    if (!activeBaseSample || !activeBaseSample.values?.length || !sensors.length) return null;
+    const picks = pickBestChannels(activeBaseSample.values, sensors, 1);
+    return picks[0] || sensors[0] || null;
+  }, [activeBaseSample, sensors]);
 
   const importLabelsEntries = (entries) => {
     const ns = entries.map(e => ({ filename: String(e.filename || e.path || ''), path: String(e.path || ''), sampleName: String(e.name || ''), label: String(e.label), sensors: [], interval_ms: 33.33, values: [], raw: {}, id: uid(), enabled: e.enabled !== false, category: e.category === 'testing' ? 'testing' : 'training', duration_ms: Number(e.length || 0) * 33.33, hash: uid(), fromLabels: true }));
@@ -371,7 +506,7 @@ export default function App() {
               <button onClick={selectNone} style={Btn('#1e293b', '#64748b')}>None</button>
               <button onClick={combine} disabled={selectedIds.size < 2} style={Btn('#1d4ed8', '#fff', selectedIds.size < 2)}>Merge</button>
               <button onClick={dedup} style={Btn('#6d28d9', '#c4b5fd')}>DeDup</button>
-              <button onClick={exportSelected} disabled={!selectedIds.size} style={Btn('#065f46', '#34d399', !selectedIds.size)}>Export</button>
+              <button onClick={exportSelected} disabled={!selectedIds.size} style={Btn('#065f46', '#34d399', !selectedIds.size)}>Export ZIP</button>
             </div>
             <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
               {selectedIds.size >= 2 && (
@@ -442,10 +577,39 @@ export default function App() {
                       {activeSample.sampleName && <span style={{ color: '#475569', fontWeight: 400 }}> · {activeSample.sampleName}</span>}
                     </span>
                     <button onClick={() => setSplitTarget(activeSample)} style={{ ...Btn('#1a0f00', '#fbbf24'), border: '1px solid #92400e' }}>✂️ Split</button>
+                    <button onClick={() => del(activeSample.id)} style={{ ...Btn('#450a0a', '#f87171'), border: '1px solid #7f1d1d' }}>🗑 Delete</button>
                     <button onClick={() => downloadJSON(buildEIJson(activeSample), activeSample.filename)} style={Btn('#065f46', '#34d399')}>Export</button>
                   </div>
                 )}
                 <WaveformViewer samples={viewSamples} sensors={sensors} />
+                {activeSplitMeta && activeBaseSample && activeBaseSample.values.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <SplitHighlightsViewer
+                      sample={activeBaseSample}
+                      sensors={sensors}
+                      segments={activeSplitMeta.segments || []}
+                      preferredSensor={splitPreferredSensor}
+                    />
+                    <div style={{ marginTop: 8, background: '#080f1e', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
+                      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>
+                        Split data from base sample <span style={{ color: '#f1f5f9' }}>{activeBaseSample.label}</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 6 }}>
+                        {(activeSplitMeta.segments || []).map((seg, i) => (
+                          <div key={i} style={{ background: '#050c1a', border: `1px solid ${SENSOR_COLORS[i % SENSOR_COLORS.length]}55`, borderRadius: 6, padding: 8 }}>
+                            <div style={{ fontSize: 10, color: SENSOR_COLORS[i % SENSOR_COLORS.length], fontWeight: 700, marginBottom: 2 }}>Part {i + 1}</div>
+                            <div style={{ fontSize: 9, color: '#64748b', lineHeight: 1.5 }}>
+                              <div>Label: <span style={{ color: '#94a3b8' }}>{seg.label || activeBaseSample.label}</span></div>
+                              <div>Range: <span style={{ color: '#94a3b8' }}>{seg.start} → {seg.end}</span></div>
+                              <div>Length: <span style={{ color: '#94a3b8' }}>{seg.length} pts ({formatMs(seg.length * activeBaseSample.interval_ms)})</span></div>
+                              <div>File: <span style={{ color: '#475569' }}>{seg.filename}</span></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {viewSamples.length > 0 && (
                   <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: 8 }}>
                     {viewSamples.map(s => (

@@ -151,7 +151,7 @@ export default function FlatDetectorPanel({ targetSample, allSamples, sensors, o
     if (!useChannels.length) return;
     const res = runFlatDetector(values, sensors, flatSamples, useChannels, { windowSize, threshold, minFlatPts });
     setResult(res);
-    onCutsFound(res.cuts);
+    onCutsFound(res.cuts, res);
   }, [allSamples, selectedFlatIds, selectedCh, sensors, values, windowSize, threshold, minFlatPts, onCutsFound]);
 
   // Auto-run when params or selection changes

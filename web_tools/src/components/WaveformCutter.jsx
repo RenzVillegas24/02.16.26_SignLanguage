@@ -11,6 +11,7 @@ export default function WaveformCutter({
   const canvasRef = useRef();
   const [dragging, setDragging] = useState(null);
   const [hover, setHover] = useState(null);
+  const [mouseHoverX, setMouseHoverX] = useState(null);
   const N = values.length;
 
   const getX = (idx, W) => (N > 1 ? (idx / (N - 1)) * W : 0);
@@ -132,7 +133,23 @@ export default function WaveformCutter({
         H - 25
       );
     });
-  }, [values, sensors, cutPoints, activeSensors, dragging, hover, interval_ms, N]);
+
+    // Hover add cut line
+    if (hover === null && dragging === null && mouseHoverX !== null) {
+      ctx.strokeStyle = '#38bdf8aa';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(mouseHoverX, 0);
+      ctx.lineTo(mouseHoverX, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '9px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('✂️ Split', mouseHoverX, 40);
+    }
+  }, [values, sensors, cutPoints, activeSensors, dragging, hover, mouseHoverX, interval_ms, N]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -171,13 +188,15 @@ export default function WaveformCutter({
       const nc = [...cutPoints];
       nc[dragging] = clamp(idx, prev + minG, next - minG);
       onCutsChange(nc);
+      setMouseHoverX(null);
     } else {
       setHover(hitCut(x, W));
+      setMouseHoverX(x);
     }
   };
 
   const onMouseUp = () => setDragging(null);
-  const onMouseLeave = () => { setDragging(null); setHover(null); };
+  const onMouseLeave = () => { setDragging(null); setHover(null); setMouseHoverX(null); };
   const onDoubleClick = (e) => {
     const x = evX(e), W = canvasRef.current.width;
     const hit = hitCut(x, W);
