@@ -1,17 +1,21 @@
 /*
  * @file web_server.cpp
  * @brief WiFi Soft-AP + async-style HTTP server with WebSocket
- *        Serves a real-time hand visualisation page.
+ *        Serves real-time hand visualization + MP3 playback
  *
  * NOTE: Uses the built-in WiFi + WebServer classes (no external lib).
- *       A single WebSocket-style approach is emulated with Server-Sent
- *       Events (SSE) because the ESP32 Arduino core's WebServer lacks
- *       native WebSocket.  SSE is simpler and works in all browsers.
+ *       SSE for real-time updates, LittleFS for MP3 file serving.
  */
 #include "web_server.h"
 #include "config.h"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <LittleFS.h>
+
+// Extern references to local GUI settings (from gui_api.cpp)
+extern bool     cfg_local_speech;
+extern uint8_t  cfg_local_voice;   // 0 = Boy, 1 = Girl
+extern bool     cfg_local_sensors;
 
 static WebServer server(WEB_SERVER_PORT);
 static bool      running = false;
@@ -31,57 +35,216 @@ static const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <title>Signa – Sign Language Glove</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#111;color:#eee;font-family:'Segoe UI',sans-serif;
-     display:flex;flex-direction:column;align-items:center;padding:16px}
-h1{font-size:1.3rem;margin-bottom:8px;color:#0af}
-h2{font-size:1rem;color:#888;margin:12px 0 6px}
-#gesture{font-size:2.4rem;color:#0fa;margin:16px 0;min-height:50px;
-         text-align:center}
-.bars{display:flex;gap:6px;justify-content:center;width:100%;max-width:360px}
-.bar-wrap{display:flex;flex-direction:column;align-items:center;flex:1}
-.bar-outer{width:100%;height:120px;background:#222;border-radius:6px;
-           position:relative;overflow:hidden}
-.bar-inner{position:absolute;bottom:0;width:100%;border-radius:6px;
-           transition:height .15s}
-.bar-lbl{font-size:.7rem;color:#999;margin-top:4px}
-.flex .bar-inner{background:#0cf}
-.hall .bar-inner{background:#f80}
-.hall-top .bar-inner{background:#0f8}
-#imu{font-size:.85rem;color:#aaa;margin-top:14px;text-align:center}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;
-     margin-right:6px}
-.dot.on{background:#0f0}.dot.off{background:#f00}
-#status{margin-top:12px;font-size:.8rem}
+body{background:linear-gradient(135deg,#0a0e27 0%,#1a1f3a 100%);
+     color:#eee;font-family:'Segoe UI',Roboto,sans-serif;
+     display:flex;flex-direction:column;align-items:center;padding:16px;
+     min-height:100vh;font-size:14px}
+.container{width:100%;max-width:500px}
+header{text-align:center;margin-bottom:24px;padding:12px 0;
+       border-bottom:2px solid #0af;border-radius:8px}
+h1{font-size:1.6rem;margin-bottom:4px;color:#0af;text-shadow:0 0 10px rgba(0,175,255,0.3)}
+.subtitle{font-size:0.85rem;color:#888}
+.prediction-area{background:rgba(0,175,255,0.05);border:2px solid #0af;
+               border-radius:12px;padding:24px;margin-bottom:20px;text-align:center}
+#gesture{font-size:3rem;color:#0fa;min-height:60px;text-shadow:0 0 10px rgba(0,255,170,0.3);
+        font-weight:bold}
+.gesture-label{font-size:0.85rem;color:#666;margin-top:8px}
+.controls{background:rgba(255,255,255,0.03);border:1px solid #333;border-radius:12px;
+         padding:16px;margin-bottom:20px}
+.control-group{margin-bottom:16px}
+.control-group:last-child{margin-bottom:0}
+.control-label{display:flex;align-items:center;gap:8px;margin-bottom:8px;
+              color:#aaa;font-size:0.9rem}
+.toggle{display:inline-flex;align-items:center;width:44px;height:24px;
+       background:#444;border:1px solid #555;border-radius:12px;cursor:pointer;
+       position:relative;transition:background 0.3s}
+.toggle.on{background:#0fa}
+.toggle::after{content:'';position:absolute;width:20px;height:20px;
+             background:#222;border-radius:10px;left:2px;transition:left 0.3s}
+.toggle.on::after{left:22px;background:#fff}
+.dropdown{width:100%;padding:8px 12px;background:#1a1f3a;color:#eee;
+         border:1px solid #0af;border-radius:6px;font-size:0.9rem;cursor:pointer}
+.sensor-section{background:rgba(255,255,255,0.03);border:1px solid #333;
+               border-radius:12px;padding:16px}
+.sensor-section.hidden{display:none}
+h2{font-size:1rem;color:#0af;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.bars{display:flex;gap:6px;justify-content:center;width:100%;margin-bottom:16px;flex-wrap:wrap}
+.bar-wrap{display:flex;flex-direction:column;align-items:center;flex:0 0 calc(20% - 5px)}
+.bar-outer{width:100%;height:100px;background:rgba(255,255,255,0.05);border:1px solid #444;
+          border-radius:6px;position:relative;overflow:hidden}
+.bar-inner{position:absolute;bottom:0;width:100%;border-radius:6px;transition:height 0.15s}
+.bar-lbl{font-size:0.65rem;color:#999;margin-top:4px;text-align:center}
+.flex .bar-inner{background:linear-gradient(180deg,#0cf,#09f)}
+.hall .bar-inner{background:linear-gradient(180deg,#f80,#e60)}
+.hall-top .bar-inner{background:linear-gradient(180deg,#0f8,#06d)}
+#imu{font-size:0.85rem;color:#aaa;text-align:center;padding:8px;
+    background:rgba(255,255,255,0.02);border-radius:6px;margin-bottom:16px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.dot.on{background:#0f0;box-shadow:0 0 6px #0f0}.dot.off{background:#f00}
+#status{text-align:center;font-size:0.85rem;padding:12px;
+       background:rgba(255,255,255,0.02);border-radius:6px;margin-bottom:16px}
+.button-group{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}
+button{padding:10px 20px;background:#0af;color:#000;border:none;border-radius:6px;
+       cursor:pointer;font-weight:bold;font-size:0.9rem;transition:background 0.3s}
+button:hover{background:#0df}
+button:active{background:#09f}
+@media(max-width:480px){
+  body{padding:12px}
+  h1{font-size:1.4rem}
+  #gesture{font-size:2.2rem}
+  .control-label{font-size:0.85rem}
+}
 </style>
 </head>
 <body>
-<h1>&#x1F91F; Signa Glove</h1>
-<div id="gesture">---</div>
+<div class="container">
+  <header>
+    <h1>✋ Signa Glove</h1>
+    <div class="subtitle">Real-time Sign Language Recognition</div>
+  </header>
 
-<h2>Flex Sensors</h2>
-<div class="bars flex" id="flex-bars"></div>
+  <div class="prediction-area">
+    <div id="gesture">---</div>
+    <div class="gesture-label">Detected Sign</div>
+  </div>
 
-<h2>Hall Sensors (Side)</h2>
-<div class="bars hall" id="hall-bars"></div>
+  <div class="controls">
+    <div class="control-group">
+      <div class="control-label">
+        <span>🔊 Audio Output</span>
+        <div class="toggle" id="toggle-audio" onclick="toggleAudio()"></div>
+      </div>
+    </div>
+    
+    <div class="control-group">
+      <div class="control-label">
+        <span>👁️ Show Sensors</span>
+        <div class="toggle" id="toggle-sensors" onclick="toggleSensors()"></div>
+      </div>
+    </div>
+    
+    <div class="control-group">
+      <div class="control-label">👤 Voice</div>
+      <select class="dropdown" id="voice-select" onchange="changeVoice()">
+        <option value="0">👦 Boy</option>
+        <option value="1">👧 Girl</option>
+      </select>
+    </div>
+  </div>
 
-<h2>Hall Sensors (Top)</h2>
-<div class="bars hall-top" id="hall-top-bars"></div>
+  <div id="sensor-section" class="sensor-section hidden">
+    <h2>📊 Flex Sensors</h2>
+    <div class="bars flex" id="flex-bars"></div>
 
-<div id="imu"></div>
-<div id="status"><span class="dot off" id="dot"></span>Connecting&hellip;</div>
+    <h2>🧲 Hall Sensors (Side)</h2>
+    <div class="bars hall" id="hall-bars"></div>
+
+    <h2>📐 IMU</h2>
+    <div id="imu"></div>
+  </div>
+
+  <div id="status"><span class="dot off" id="dot"></span>Connecting…</div>
+
+  <div class="button-group">
+    <button onclick="testAudio()">🔊 Test Audio</button>
+    <button onclick="location.reload()">🔄 Refresh</button>
+  </div>
+</div>
 
 <script>
 const FINGERS=['Thumb','Index','Middle','Ring','Pinky'];
+let audioEnabled=true;
+let showSensors=false;
+let currentVoice='0';
+let audioContext=null;
+let lastGest='';
+
+function initUI(){
+  const tc=document.getElementById('toggle-audio');
+  const ts=document.getElementById('toggle-sensors');
+  tc.classList.add('on');
+  fetch('/api/settings')
+    .then(r=>r.json())
+    .then(d=>{
+      audioEnabled=d.speech;
+      showSensors=d.sensors;
+      currentVoice=String(d.voice);
+      tc.classList.toggle('on',audioEnabled);
+      ts.classList.toggle('on',showSensors);
+      document.getElementById('voice-select').value=currentVoice;
+      updateSensorDisplay();
+    })
+    .catch(e=>console.error('Failed to load settings:',e));
+}
+
 function makeBars(id){
   const c=document.getElementById(id);
+  if(!c) return;
   FINGERS.forEach(f=>{
     const w=document.createElement('div');w.className='bar-wrap';
-    w.innerHTML='<div class="bar-outer"><div class="bar-inner" id="'+id+'-'+f+'"'+
-      ' style="height:0%"></div></div><div class="bar-lbl">'+f[0]+'</div>';
+    w.innerHTML='<div class="bar-outer"><div class="bar-inner" id="'+id+'-'+f+'" style="height:0%"></div></div><div class="bar-lbl">'+f[0]+'</div>';
     c.appendChild(w);
   });
 }
-makeBars('flex-bars');makeBars('hall-bars');makeBars('hall-top-bars');
+
+function toggleAudio(){
+  audioEnabled=!audioEnabled;
+  document.getElementById('toggle-audio').classList.toggle('on');
+  fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({speech:audioEnabled,voice:parseInt(currentVoice),sensors:showSensors})});
+}
+
+function toggleSensors(){
+  showSensors=!showSensors;
+  document.getElementById('toggle-sensors').classList.toggle('on');
+  updateSensorDisplay();
+  fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({speech:audioEnabled,voice:parseInt(currentVoice),sensors:showSensors})});
+}
+
+function updateSensorDisplay(){
+  const sec=document.getElementById('sensor-section');
+  if(showSensors && sec.classList.contains('hidden')){
+    sec.classList.remove('hidden');
+  }else if(!showSensors && !sec.classList.contains('hidden')){
+    sec.classList.add('hidden');
+  }
+}
+
+function changeVoice(){
+  currentVoice=document.getElementById('voice-select').value;
+  fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({speech:audioEnabled,voice:parseInt(currentVoice),sensors:showSensors})});
+}
+
+function playAudio(label){
+  if(!audioEnabled) return;
+  const voiceDir=currentVoice==='0'?'boy':'girl';
+  const audioUrl='/audio/'+voiceDir+'/'+encodeURIComponent(label)+'.mp3';
+  const audio=new Audio(audioUrl);
+  audio.onerror=()=>{
+    console.log('MP3 not found, using TTS for:',label);
+    if(window.speechSynthesis){
+      window.speechSynthesis.cancel();
+      const utt=new SpeechSynthesisUtterance(label);
+      utt.rate=0.9;
+      window.speechSynthesis.speak(utt);
+    }
+  };
+  audio.oncanplaythrough=()=>audio.play().catch(e=>console.log('Audio play failed:',e));
+  audio.load();
+}
+
+function testAudio(){
+  if(!audioEnabled){
+    alert('Audio is disabled. Enable it first!');
+    return;
+  }
+  playAudio('hello');
+}
+
+makeBars('flex-bars');
+makeBars('hall-bars');
 
 const gest=document.getElementById('gesture');
 const imu=document.getElementById('imu');
@@ -91,21 +254,39 @@ const stat=document.getElementById('status');
 let src;
 function connect(){
   src=new EventSource('/events');
-  src.onopen=()=>{dot.className='dot on';stat.innerHTML='<span class="dot on"></span>Connected';};
-  src.onerror=()=>{dot.className='dot off';stat.innerHTML='<span class="dot off"></span>Reconnecting&hellip;';};
+  src.onopen=()=>{
+    dot.className='dot on';
+    stat.innerHTML='<span class="dot on"></span>Connected';
+  };
+  src.onerror=()=>{
+    dot.className='dot off';
+    stat.innerHTML='<span class="dot off"></span>Reconnecting…';
+  };
   src.onmessage=e=>{
     try{
       const d=JSON.parse(e.data);
-      gest.textContent=d.g||'---';
+      const currentGest=d.g||'---';
+      gest.textContent=currentGest;
+      if(currentGest!=='---' && currentGest!==lastGest && audioEnabled){
+        lastGest=currentGest;
+        playAudio(currentGest);
+      }else if(currentGest==='---'){
+        lastGest='';
+      }
       FINGERS.forEach((f,i)=>{
-        document.getElementById('flex-bars-'+f).style.height=(d.f[i]/4095*100).toFixed(1)+'%';
-        document.getElementById('hall-bars-'+f).style.height=(d.h[i]/4095*100).toFixed(1)+'%';
-        document.getElementById('hall-top-bars-'+f).style.height=(d.ht[i]/4095*100).toFixed(1)+'%';
+        const fb=document.getElementById('flex-bars-'+f);
+        const hb=document.getElementById('hall-bars-'+f);
+        if(fb) fb.style.height=(d.f[i]/4095*100).toFixed(1)+'%';
+        if(hb) hb.style.height=(d.h[i]/4095*100).toFixed(1)+'%';
       });
-      imu.innerHTML='Pitch: '+d.p.toFixed(1)+'&deg; &nbsp; Roll: '+d.r.toFixed(1)+'&deg;';
-    }catch(err){}
+      if(imu) imu.innerHTML='Pitch: '+d.p.toFixed(1)+'° | Roll: '+d.r.toFixed(1)+'° | Accel: '+d.ax.toFixed(1)+', '+d.ay.toFixed(1)+', '+d.az.toFixed(1);
+    }catch(err){
+      console.error('Data parse error:',err);
+    }
   };
 }
+
+initUI();
 connect();
 </script>
 </body>
@@ -146,6 +327,87 @@ static void handle_events() {
     server.client().stop();
 }
 
+static void handle_audio() {
+    // Path format: /audio/boy/<label>.mp3 or /audio/girl/<label>.mp3
+    String uri = server.uri();
+    
+    // Extract the path after /audio/
+    String filepath = uri.substring(6);  // Skip "/audio"
+    
+    // Prepend the LittleFS root
+    filepath = "/" + filepath;
+    
+    Serial.printf("[WEB] Audio request: %s\n", filepath.c_str());
+    
+    // Open the file
+    File file = LittleFS.open(filepath, "r");
+    if (!file) {
+        Serial.printf("[WEB] Audio file not found: %s\n", filepath.c_str());
+        server.send(404, "text/plain", "Not Found");
+        return;
+    }
+    
+    size_t fileSize = file.size();
+    server.sendHeader("Content-Type", "audio/mpeg");
+    server.sendHeader("Content-Length", String(fileSize));
+    server.sendHeader("Accept-Ranges", "bytes");
+    server.setContentLength(fileSize);
+    server.send(200, "audio/mpeg", "");
+    
+    // Stream file in chunks
+    uint8_t buf[1024];
+    while (file.available()) {
+        size_t len = file.read(buf, sizeof(buf));
+        server.client().write(buf, len);
+    }
+    file.close();
+}
+
+static void handle_api_settings() {
+    if (server.method() == HTTP_GET) {
+        // Return current settings
+        char json[128];
+        snprintf(json, sizeof(json),
+            "{\"speech\":%s,\"voice\":%d,\"sensors\":%s}",
+            cfg_local_speech ? "true" : "false",
+            (int)cfg_local_voice,
+            cfg_local_sensors ? "true" : "false");
+        server.send(200, "application/json", json);
+    } else if (server.method() == HTTP_POST) {
+        // Parse and set settings
+        if (server.hasArg("plain")) {
+            String body = server.arg("plain");
+            // Simple JSON parsing: {"speech":true,"voice":0,"sensors":true}
+            if (body.indexOf("\"speech\":true") >= 0) {
+                cfg_local_speech = true;
+            } else if (body.indexOf("\"speech\":false") >= 0) {
+                cfg_local_speech = false;
+            }
+            
+            if (body.indexOf("\"voice\":0") >= 0) {
+                cfg_local_voice = 0;
+            } else if (body.indexOf("\"voice\":1") >= 0) {
+                cfg_local_voice = 1;
+            }
+            
+            if (body.indexOf("\"sensors\":true") >= 0) {
+                cfg_local_sensors = true;
+            } else if (body.indexOf("\"sensors\":false") >= 0) {
+                cfg_local_sensors = false;
+            }
+            
+            Serial.printf("[WEB] Settings updated: speech=%s, voice=%s, sensors=%s\n",
+                cfg_local_speech ? "ON" : "OFF",
+                cfg_local_voice == 0 ? "Boy" : "Girl",
+                cfg_local_sensors ? "ON" : "OFF");
+            
+            server.send(200, "application/json", "{\"ok\":true}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        }
+    }
+}
+
 static void sse_broadcast(const String &json) {
     String msg = "data: " + json + "\n\n";
     for (int i = 0; i < MAX_SSE_CLIENTS; i++) {
@@ -173,8 +435,18 @@ void web_server_start() {
                   WIFI_AP_SSID,
                   WiFi.softAPIP().toString().c_str());
 
-    server.on("/",       handle_root);
-    server.on("/events", handle_events);
+    server.on("/",                  handle_root);
+    server.on("/events",            handle_events);
+    server.on("/api/settings",      handle_api_settings);
+    server.onNotFound([]() {
+        // Default audio handler for paths starting with /audio/
+        if (server.uri().startsWith("/audio/")) {
+            handle_audio();
+        } else {
+            server.send(404, "text/plain", "404 Not Found");
+        }
+    });
+    
     server.begin();
     running = true;
 }

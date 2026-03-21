@@ -89,9 +89,9 @@ Hall-effect sensors on TOP of each finger (No Longer Used)
 
 // ─────────────────────────────────────────────
 //  Serial Command Interface
-//  Comment out to disable serial command handling
 // ─────────────────────────────────────────────
-#define SERIAL_COMMAND
+// Removed for runtime performance (prediction path no longer carries
+// serial callback / command-processing overhead).
 
 // ─────────────────────────────────────────────
 //  WiFi AP Configuration (for WEB mode)
@@ -108,7 +108,7 @@ enum AppMode {
     MODE_TRAIN,
     MODE_PREDICT_LOCAL,
     MODE_PREDICT_WEB,
-    MODE_DATA_COLLECT,      // Web Serial raw data collection mode
+    MODE_DATA_COLLECT,      // Reserved (serial data collect path removed)
     MODE_SETTINGS,
     MODE_TEST
 };
@@ -129,12 +129,13 @@ struct SensorData {
 // ─────────────────────────────────────────────
 #define SENSOR_READ_INTERVAL_MS     33      // ~30 Hz sensor polling
 #define DISPLAY_UPDATE_INTERVAL_MS  100
+#define PREDICT_UPDATE_INTERVAL_MS  33      // faster UI refresh while in predict modes
 #define BATTERY_READ_INTERVAL_MS    2000
 #define TRAIN_SERIAL_INTERVAL_MS    33      // ~30 Hz serial output
 #define EI_PUSH_INTERVAL_MS         33      // ~30 Hz EI sliding window
-#define EI_INFER_INTERVAL_MS        66      // ~15 Hz inference; smoother CPU load, low UI latency
+#define EI_INFER_INTERVAL_MS        66      // base cadence
 #define EI_INFER_INTERVAL_FAST_MS   33      // fast mode while motion is present
-#define EI_INFER_INTERVAL_SLOW_MS   99      // idle mode to reduce CPU spikes
+#define EI_INFER_INTERVAL_SLOW_MS   66      // keep prediction responsive even when mostly idle
 #define EI_FAST_MODE_HOLD_MS        450     // keep fast mode this long after motion
 
 // Fast-mode motion thresholds (on processed features)
@@ -149,12 +150,12 @@ struct SensorData {
 // Sign acceptance/release hysteresis (anti-random-spike)
 #define EI_SIGN_ENTER_CONF          0.90f   // minimum confidence to enter a sign from idle
 #define EI_SIGN_EXIT_CONF           0.52f   // drop back to idle if current sign falls below this
-#define EI_SIGN_CONFIRM_FRAMES      2       // consecutive frames required before accepting/switching sign
+#define EI_SIGN_CONFIRM_FRAMES      1       // reduce handover delay for sign enter/switch
 
 // Uncertainty gate (Edge Impulse-like): if top class is weak or too close
 // to runner-up, treat result as uncertain and output no prediction ("---").
-#define EI_UNCERTAIN_MIN_CONF       0.90f   // minimum top-1 confidence
-#define EI_UNCERTAIN_MIN_MARGIN     0.12f   // minimum (top1 - top2) margin
+#define EI_UNCERTAIN_MIN_CONF       0.82f   // faster acceptance while still rejecting weak guesses
+#define EI_UNCERTAIN_MIN_MARGIN     0.08f   // lower margin gate to reduce lag on close classes
 #define POWER_BTN_DEBOUNCE_MS       300
 #define AUTO_SLEEP_TIMEOUT_MS       60000   // 60 seconds
 #define MUX_SETTLE_US               100     // Microseconds
