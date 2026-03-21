@@ -9,6 +9,7 @@ export const lastAlgoStore = {
   // Auto-detect params
   algo: 'energy',
   windowSize: 30,
+  windowIncreaseStride: 10,
   threshold: 0.25,
   stdMult: 1.5,
   sensitivity: 0.25,

@@ -25,14 +25,15 @@ export default function DualRange({ value, onChange }) {
   return (
     <div
       ref={ref}
-      style={{ position: 'relative', height: 18, display: 'flex', alignItems: 'center', padding: '0 7px' }}
+      style={{ position: 'relative', height: 18, width: '100%', userSelect: 'none' }}
     >
-      <div style={{ position: 'absolute', left: 7, right: 7, height: 3, background: '#1e293b', borderRadius: 2 }} />
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 7, height: 3, background: '#1e293b', borderRadius: 2 }} />
       <div
         style={{
           position: 'absolute',
-          left: `calc(7px + ${lo}% * ((100% - 14px) / 100))`,
-          right: `calc(7px + ${100 - hi}% * ((100% - 14px) / 100))`,
+          left: `${lo}%`,
+          width: `${Math.max(0, hi - lo)}%`,
+          top: 7,
           height: 3,
           background: '#3b82f6',
           borderRadius: 2,
@@ -44,7 +45,7 @@ export default function DualRange({ value, onChange }) {
           onMouseDown={drag(i)}
           style={{
             position: 'absolute',
-            left: `calc(7px + ${v}% * ((100% - 14px) / 100))`,
+            left: `${v}%`,
             transform: 'translateX(-50%)',
             width: 13,
             height: 13,
@@ -53,6 +54,7 @@ export default function DualRange({ value, onChange }) {
             cursor: 'ew-resize',
             border: '2px solid #060d1a',
             boxSizing: 'border-box',
+            top: 2,
           }}
         />
       ))}

@@ -7,6 +7,8 @@ import SplitPreviewCanvas from './SplitPreviewCanvas';
 import FlatDetectorPanel from './FlatDetectorPanel';
 import { lastAlgoStore } from '../utils/lastAlgo';
 import { runFlatDetector } from '../utils/flatDetector';
+import { groupSensorsByDiscriminant } from '../utils/flatDetector';
+import { getSensorGroup } from './WaveformViewer';
 
 // ─── Batch preview ─────────────────────────────────────────────────────────
 function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, padMin, padMax, padUnit, padRandom, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample }) {
@@ -123,6 +125,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   // Auto params — restored from lastAlgoStore
   const [algo, setAlgo]             = useState(lastAlgoStore.algo);
   const [windowSize, setWindowSize] = useState(lastAlgoStore.windowSize);
+  const [windowIncreaseStride, setWindowIncreaseStride] = useState(lastAlgoStore.windowIncreaseStride ?? 10);
   const [threshold, setThreshold]   = useState(lastAlgoStore.threshold);
   const [stdMult, setStdMult]       = useState(lastAlgoStore.stdMult);
   const [sensitivity, setSensitivity] = useState(lastAlgoStore.sensitivity);
@@ -194,13 +197,13 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   // Persist to store when algo params change
   useEffect(() => {
     Object.assign(lastAlgoStore, {
-      mode, algo, windowSize, threshold, stdMult, sensitivity, minGap, numParts,
+      mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
       equalParts,
       shiftEnabled: enableShift, shiftMin, shiftMax, shiftUnit,
       padEnabled: enablePad, padMin, padMax, padUnit, padRandom,
       flatAutoDisable: autoDisableFlat,
     });
-  }, [mode, algo, windowSize, threshold, stdMult, sensitivity, minGap, numParts,
+  }, [mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
       equalParts, enableShift, shiftMin, shiftMax, shiftUnit,
       enablePad, padMin, padMax, padUnit, padRandom, autoDisableFlat]);
 
@@ -208,6 +211,22 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   const allCuts    = useMemo(() => [0, ...cuts, N].sort((a, b) => a - b), [cuts, N]);
   const segments   = useMemo(() => allCuts.slice(0, -1).map((s, i) => ({ start: s, end: allCuts[i + 1], idx: i })), [allCuts]);
   const keptSegs   = useMemo(() => segments.filter(s => !removedSegs.has(s.idx)), [segments, removedSegs]);
+  const estimatedWindowsPerSample = useMemo(() => {
+    const w = Math.max(1, Math.round(Number(windowSize) || 1));
+    const s = Math.max(1, Math.round(Number(windowIncreaseStride) || 1));
+    if (!N || N < w) return 0;
+    return Math.floor((N - w) / s) + 1;
+  }, [N, windowSize, windowIncreaseStride]);
+  const estimatedWindowsBatchTotal = useMemo(() => {
+    if (!isBatch || !batchSamples.length) return estimatedWindowsPerSample;
+    const w = Math.max(1, Math.round(Number(windowSize) || 1));
+    const s = Math.max(1, Math.round(Number(windowIncreaseStride) || 1));
+    return batchSamples.reduce((acc, smpl) => {
+      const n = smpl?.values?.length || 0;
+      if (n < w) return acc;
+      return acc + (Math.floor((n - w) / s) + 1);
+    }, 0);
+  }, [isBatch, batchSamples, estimatedWindowsPerSample, windowSize, windowIncreaseStride]);
 
   const toggleRemove = idx => setRemovedSegs(p => { const n = new Set(p); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
 
@@ -564,11 +583,21 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               </div>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
                 {(algo === 'energy' || algo === 'peak2peak' || algo === 'variance') && <Sldr label="Window" value={windowSize} min={5} max={200} onChange={setWindowSize} fmt={v => `${v}pts`} />}
+                <Sldr label="Window Stride" value={windowIncreaseStride} min={1} max={Math.max(1, windowSize)} onChange={setWindowIncreaseStride} fmt={v => `${v}pts`} />
                 {algo === 'energy' && <Sldr label="Threshold" value={Math.round(threshold * 100)} min={5} max={80} onChange={v => setThreshold(v / 100)} fmt={v => `${v}%`} />}
                 {algo === 'threshold' && <Sldr label="Std ×" value={Math.round(stdMult * 10)} min={5} max={50} onChange={v => setStdMult(v / 10)} fmt={v => `${(v / 10).toFixed(1)}σ`} />}
                 {(algo === 'derivative' || algo === 'variance') && <Sldr label="Sensitivity" value={Math.round(sensitivity * 100)} min={5} max={90} onChange={v => setSensitivity(v / 100)} fmt={v => `${v}%`} />}
                 {algo === 'equal' && <Sldr label="Parts" value={numParts} min={2} max={20} onChange={setNumParts} />}
                 {algo !== 'equal' && <Sldr label="Min Gap" value={minGap} min={5} max={Math.floor(N / 2)} onChange={setMinGap} fmt={v => `${v}pts`} />}
+              </div>
+              <div style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 7, padding: '8px 10px', marginBottom: 10, fontSize: 10, color: '#94a3b8', lineHeight: 1.5 }}>
+                🧮 Estimated samples from windowing: <b style={{ color: '#34d399' }}>{isBatch ? estimatedWindowsBatchTotal : estimatedWindowsPerSample}</b>
+                {isBatch
+                  ? <span style={{ color: '#64748b' }}> total windows across {batchSamples.length} selected sample{batchSamples.length !== 1 ? 's' : ''}</span>
+                  : <span style={{ color: '#64748b' }}> windows for this sample</span>}
+                <div style={{ color: '#475569', marginTop: 2 }}>
+                  Using $\text{'{samples}'} = \left\lfloor\frac{'{N - W}'}{'{S}'}\right\rfloor + 1$ where window size is W and stride is S.
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <button onClick={recalc} style={{ background: '#1d4ed8', border: 'none', color: '#fff', borderRadius: 6, padding: '7px 18px', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
@@ -755,16 +784,125 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           {/* Sensor vis toggles */}
           {!isBatch && (
             <>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: 7 }}>
-                <span style={{ fontSize: 9, color: '#334155', alignSelf: 'center', marginRight: 4 }}>PREVIEW CHANNELS:</span>
-                {sensors.map((s, i) => (
-                  <button key={s} onClick={() => setVisSensors(p => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; })} style={{
-                    background: visSensors.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '22' : '#050c1a',
-                    border: `1px solid ${visSensors.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
-                    color: visSensors.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#334155',
-                    borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer', fontFamily: 'monospace',
-                  }}>{s}</button>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 }}>
+                <span style={{ fontSize: 9, color: '#334155' }}>PREVIEW CHANNELS (by discriminant):</span>
+                {(() => {
+                  const grouped = groupSensorsByDiscriminant(sensors);
+                  const featureGroups = [
+                    { key: 'flex', label: 'Flex', color: '#38bdf8' },
+                    { key: 'hall', label: 'Hall', color: '#34d399' },
+                    { key: 'accel', label: 'Accel', color: '#f87171' },
+                    { key: 'gyro', label: 'Gyro', color: '#fbbf24' },
+                    { key: 'orient', label: 'Orient', color: '#a78bfa' },
+                  ].map(group => ({
+                    ...group,
+                    sensors: sensors.filter(s => getSensorGroup(s) === group.key),
+                  }));
+                  const groups = [
+                    { key: 'high', label: '🔴 HIGH', color: '#ef4444', sensors: grouped.high },
+                    { key: 'medium', label: '🟡 MEDIUM', color: '#f59e0b', sensors: grouped.medium },
+                    { key: 'low', label: '🟢 LOW', color: '#10b981', sensors: grouped.low },
+                  ].filter(g => g.sensors.length > 0);
+
+                  const toggleSensorGroup = (groupSensors) => {
+                    const valid = (groupSensors || []).filter(ch => sensors.includes(ch));
+                    if (!valid.length) return;
+                    setVisSensors(prev => {
+                      const next = new Set(prev);
+                      const allSelected = valid.every(ch => next.has(ch));
+                      valid.forEach(ch => (allSelected ? next.delete(ch) : next.add(ch)));
+                      return next;
+                    });
+                  };
+
+                  const selectDiscriminantGroup = (groupSensors) => {
+                    const valid = (groupSensors || []).filter(ch => sensors.includes(ch));
+                    if (!valid.length) return;
+                    setVisSensors(new Set(valid));
+                  };
+
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 8, color: '#64748b' }}>Features:</span>
+                        {featureGroups.map(group => (
+                          <button
+                            key={`feat-all-${group.key}`}
+                            onClick={() => toggleSensorGroup(group.sensors)}
+                            style={{
+                              background: '#050c1a',
+                              border: `1px solid ${group.color}`,
+                              color: group.color,
+                              borderRadius: 4,
+                              padding: '2px 8px',
+                              fontSize: 8,
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                              fontWeight: 700,
+                            }}
+                            title={`Toggle all ${group.label} channels`}
+                          >
+                            {group.key}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ height: 1, background: '#1e293b', margin: '2px 0' }} />
+                      {groups.map(group => (
+                        <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 8, fontWeight: 700, color: group.color, minWidth: 64 }}>{group.label}</span>
+                          <button
+                            onClick={() => selectDiscriminantGroup(group.sensors)}
+                            style={{
+                              background: '#050c1a',
+                              border: `1px solid ${group.color}`,
+                              color: group.color,
+                              borderRadius: 4,
+                              padding: '2px 7px',
+                              fontSize: 8,
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                              fontWeight: 700,
+                            }}
+                            title={`Select only ${group.label.replace(/^[^A-Z]+/, '')} channels`}
+                          >
+                            All
+                          </button>
+                          <span style={{ fontSize: 9, color: '#334155' }}>|</span>
+                          <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                            {group.sensors.map((s) => {
+                              const idx = sensors.indexOf(s);
+                              const selected = visSensors.has(s);
+                              return (
+                                <button
+                                  key={s}
+                                  onClick={() => setVisSensors(p => {
+                                    const n = new Set(p);
+                                    n.has(s) ? n.delete(s) : n.add(s);
+                                    return n;
+                                  })}
+                                  style={{
+                                    background: selected ? SENSOR_COLORS[idx % SENSOR_COLORS.length] + '22' : '#050c1a',
+                                    border: `1px solid ${selected ? SENSOR_COLORS[idx % SENSOR_COLORS.length] : '#1e293b'}`,
+                                    color: selected ? SENSOR_COLORS[idx % SENSOR_COLORS.length] : '#334155',
+                                    borderRadius: 4,
+                                    padding: '2px 6px',
+                                    fontSize: 8,
+                                    cursor: 'pointer',
+                                    fontFamily: 'monospace',
+                                    fontWeight: selected ? 700 : 400,
+                                  }}
+                                  title={selected ? `Hide ${s}` : `Show ${s}`}
+                                >
+                                  {s}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* EI-style preview with overlay option */}

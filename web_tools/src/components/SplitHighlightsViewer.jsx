@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SENSOR_COLORS } from '../utils/colors';
+import { groupSensorsByDiscriminant } from '../utils/flatDetector';
+import { getSensorGroup } from './WaveformViewer';
 
 const MODES = [
   { key: 'combined', label: '📈 Combined' },
@@ -256,39 +258,129 @@ export default function SplitHighlightsViewer({
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
-        {sensors.map((s, i) => {
-          const selected = displaySensors.includes(s);
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 6 }}>
+        {(() => {
+          const grouped = groupSensorsByDiscriminant(sensors);
+          const featureGroups = [
+            { key: 'flex', label: 'Flex', color: '#38bdf8' },
+            { key: 'hall', label: 'Hall', color: '#34d399' },
+            { key: 'accel', label: 'Accel', color: '#f87171' },
+            { key: 'gyro', label: 'Gyro', color: '#fbbf24' },
+            { key: 'orient', label: 'Orient', color: '#a78bfa' },
+          ].map(group => ({
+            ...group,
+            sensors: sensors.filter(s => getSensorGroup(s) === group.key),
+          }));
+          const groups = [
+            { key: 'high', label: '🔴 HIGH', color: '#ef4444', sensors: grouped.high },
+            { key: 'medium', label: '🟡 MEDIUM', color: '#f59e0b', sensors: grouped.medium },
+            { key: 'low', label: '🟢 LOW', color: '#10b981', sensors: grouped.low },
+          ].filter(g => g.sensors.length > 0);
+
+          const toggleSensorGroup = (groupSensors) => {
+            const valid = (groupSensors || []).filter(ch => sensors.includes(ch));
+            if (!valid.length) return;
+            const next = new Set(displaySensors);
+            const allSelected = valid.every(ch => next.has(ch));
+            valid.forEach(ch => (allSelected ? next.delete(ch) : next.add(ch)));
+            onSelectedSensorsChange?.([...next]);
+          };
+
+          const selectDiscriminantGroup = (groupSensors) => {
+            const valid = (groupSensors || []).filter(ch => sensors.includes(ch));
+            if (!valid.length) return;
+            onSelectedSensorsChange?.(valid);
+          };
+
           return (
-            <button
-              key={s}
-              onClick={() => {
-                const next = new Set(displaySensors);
-                if (selected) {
-                  if (next.size <= 1) return;
-                  next.delete(s);
-                } else {
-                  next.add(s);
-                }
-                onSelectedSensorsChange?.([...next]);
-              }}
-              style={{
-                background: selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '2a' : '#060d1a',
-                border: `1px solid ${selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
-                color: selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#64748b',
-                borderRadius: 4,
-                padding: '2px 7px',
-                fontSize: 9,
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontWeight: selected ? 700 : 400,
-              }}
-              title={selected ? `Hide ${s}` : `Show ${s}`}
-            >
-              {s}
-            </button>
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 8, color: '#64748b' }}>Features:</span>
+                {featureGroups.map(group => (
+                  <button
+                    key={`feat-all-${group.key}`}
+                    onClick={() => toggleSensorGroup(group.sensors)}
+                    style={{
+                      background: '#060d1a',
+                      border: `1px solid ${group.color}`,
+                      color: group.color,
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: 8,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontWeight: 700,
+                    }}
+                    title={`Toggle all ${group.label} channels`}
+                  >
+                    {group.key}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: '#1e293b', margin: '1px 0 2px' }} />
+              {groups.map(group => (
+                <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 8, fontWeight: 700, color: group.color, minWidth: 58 }}>
+                    {group.label}
+                  </span>
+                  <button
+                    onClick={() => selectDiscriminantGroup(group.sensors)}
+                    style={{
+                      background: '#060d1a',
+                      border: `1px solid ${group.color}`,
+                      color: group.color,
+                      borderRadius: 4,
+                      padding: '2px 7px',
+                      fontSize: 8,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontWeight: 700,
+                    }}
+                    title={`Select only ${group.label.replace(/^[^A-Z]+/, '')} channels`}
+                  >
+                    All
+                  </button>
+                  <span style={{ fontSize: 9, color: '#334155' }}>|</span>
+                  <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    {group.sensors.map((s) => {
+                      const i = sensors.indexOf(s);
+                      const selected = displaySensors.includes(s);
+                      return (
+                        <button
+                          key={s}
+                          onClick={() => {
+                            const next = new Set(displaySensors);
+                            if (selected) {
+                              if (next.size <= 1) return;
+                              next.delete(s);
+                            } else {
+                              next.add(s);
+                            }
+                            onSelectedSensorsChange?.([...next]);
+                          }}
+                          style={{
+                            background: selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '2a' : '#060d1a',
+                            border: `1px solid ${selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
+                            color: selected ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#64748b',
+                            borderRadius: 4,
+                            padding: '2px 6px',
+                            fontSize: 8,
+                            cursor: 'pointer',
+                            fontFamily: 'monospace',
+                            fontWeight: selected ? 700 : 400,
+                          }}
+                          title={selected ? `Hide ${s}` : `Show ${s}`}
+                        >
+                          {s}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </>
           );
-        })}
+        })()}
       </div>
 
       <canvas

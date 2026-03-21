@@ -123,8 +123,15 @@ export default function App() {
   const [minDur, maxDur] = useMemo(() => {
     if (!samples.length) return [0, 1];
     const durs = samples.map(s => s.duration_ms);
-    return [Math.min(...durs), Math.max(...durs)];
+    return [0, Math.max(...durs)];
   }, [samples]);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const durationSpan = maxDur - minDur || 1;
+  const pctToDuration = useCallback((pct) => minDur + (durationSpan * (pct / 100)), [minDur, durationSpan]);
+  const durationToPct = useCallback((durationMs) => {
+    if (durationSpan <= 0) return 0;
+    return clamp(((durationMs - minDur) / durationSpan) * 100, 0, 100);
+  }, [minDur, durationSpan]);
 
   const splitBaseIdSet = useMemo(() => new Set(samples.filter(s => s.splitBaseId).map(s => s.splitBaseId)), [samples]);
   const getSampleType = useCallback((s) => {
@@ -812,7 +819,61 @@ export default function App() {
                   <span>Duration</span>
                   <span style={{ color: '#475569' }}>{formatMs(minDur + (maxDur - minDur) * timeRange[0] / 100)} – {formatMs(minDur + (maxDur - minDur) * timeRange[1] / 100)}</span>
                 </div>
-                <DualRange value={timeRange} onChange={setTimeRange} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="number"
+                    value={Math.round(pctToDuration(timeRange[0]))}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      const p = durationToPct(v);
+                      setTimeRange(([lo, hi]) => [Math.min(p, hi - 0.1), hi]);
+                    }}
+                    min={0}
+                    max={Math.round(pctToDuration(timeRange[1]))}
+                    step={1}
+                    style={{
+                      width: 74,
+                      background: '#080f1e',
+                      color: '#94a3b8',
+                      border: '1px solid #1e293b',
+                      borderRadius: 4,
+                      padding: '2px 4px',
+                      fontSize: 9,
+                      fontFamily: 'inherit',
+                      textAlign: 'center',
+                    }}
+                    title="Minimum duration (ms)"
+                  />
+                  <div style={{ flex: 1 }}>
+                    <DualRange value={timeRange} onChange={setTimeRange} />
+                  </div>
+                  <input
+                    type="number"
+                    value={Math.round(pctToDuration(timeRange[1]))}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      const p = durationToPct(v);
+                      setTimeRange(([lo, hi]) => [lo, Math.max(p, lo + 0.1)]);
+                    }}
+                    min={Math.round(pctToDuration(timeRange[0]))}
+                    max={Math.round(maxDur)}
+                    step={1}
+                    style={{
+                      width: 74,
+                      background: '#080f1e',
+                      color: '#94a3b8',
+                      border: '1px solid #1e293b',
+                      borderRadius: 4,
+                      padding: '2px 4px',
+                      fontSize: 9,
+                      fontFamily: 'inherit',
+                      textAlign: 'center',
+                    }}
+                    title="Maximum duration (ms)"
+                  />
+                </div>
               </div>
             )}
           </div>

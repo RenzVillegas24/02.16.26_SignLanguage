@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { SENSOR_COLORS } from '../utils/colors';
 import { getSensorGroup } from './WaveformViewer';
+import { groupSensorsByDiscriminant } from '../utils/flatDetector';
 
 const SENSOR_GROUPS_COLOR = {
   flex: '#38bdf8', hall: '#34d399', accel: '#f87171',
@@ -366,6 +367,19 @@ export default function SplitPreviewCanvas({ values, sensors, interval_ms, cutPo
     return total - removedSegments.size;
   }, [cutPoints, removedSegments]);
 
+  // Show which discriminant levels are represented in active sensors
+  const activeLevels = useMemo(() => {
+    if (!activeSensors || !activeSensors.length) return new Set();
+    const grouped = groupSensorsByDiscriminant(sensors);
+    const levels = new Set();
+    activeSensors.forEach(s => {
+      if (grouped.high.includes(s)) levels.add('high');
+      if (grouped.medium.includes(s)) levels.add('medium');
+      if (grouped.low.includes(s)) levels.add('low');
+    });
+    return levels;
+  }, [activeSensors, sensors]);
+
   return (
     <div>
       {/* View mode toggle */}
@@ -381,6 +395,13 @@ export default function SplitPreviewCanvas({ values, sensors, interval_ms, cutPo
         <span style={{ fontSize: 9, color: '#475569', marginLeft: 4 }}>
           {keptCount}/{cutPoints.length + 1} segments kept · click to remove/restore
         </span>
+              {/* Discriminant levels indicator */}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+                <span style={{ fontSize: 8, color: '#64748b' }}>Discriminant:</span>
+                {activeLevels.has('high') && <span style={{ fontSize: 8, fontWeight: 700, color: '#ef4444' }}>🔴 HIGH</span>}
+                {activeLevels.has('medium') && <span style={{ fontSize: 8, fontWeight: 700, color: '#f59e0b' }}>🟡 MED</span>}
+                {activeLevels.has('low') && <span style={{ fontSize: 8, fontWeight: 700, color: '#10b981' }}>🟢 LOW</span>}
+              </div>
       </div>
 
       {viewMode === 'combined' && (

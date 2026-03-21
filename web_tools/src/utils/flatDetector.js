@@ -210,3 +210,29 @@ export function runFlatDetector(targetValues, sensors, flatSamples, useChannels,
 
   return { cuts, scores: windowScores, flatRegions, profile };
 }
+
+/**
+ * Get discriminant power for a sensor
+ * @param {string} sensorName - sensor key (e.g., 'gx', 'hall0')
+ * @returns {'high' | 'medium' | 'low'} - discriminant power
+ */
+export function getSensorDiscriminantPower(sensorName) {
+  const entry = FLAT_DISCRIMINANT_CHANNELS.find(d => d.key === sensorName);
+  return entry?.power || 'low'; // default to low if not found
+}
+
+/**
+ * Group sensors by discriminant power (high, medium, low)
+ * @param {string[]} sensors - list of sensor names
+ * @returns {Object} - { high: [], medium: [], low: [] }
+ */
+export function groupSensorsByDiscriminant(sensors) {
+  const result = { high: [], medium: [], low: [] };
+  sensors.forEach(sensor => {
+    const power = getSensorDiscriminantPower(sensor);
+    if (result.hasOwnProperty(power)) {
+      result[power].push(sensor);
+    }
+  });
+  return result;
+}
