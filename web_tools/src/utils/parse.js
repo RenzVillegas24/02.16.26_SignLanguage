@@ -1,6 +1,13 @@
 // ─── ID counter ──────────────────────────────────────────────────────────────
 let _uid = 0;
 export const uid = () => ++_uid;
+// Call after loading persisted IDs to prevent collisions with existing numeric IDs.
+// Pass the maximum numeric ID found among loaded samples so future uid() calls
+// always produce values strictly higher than any existing ID.
+export const syncUid = (maxId) => {
+  const n = Math.max(_uid, Number(maxId) || 0);
+  _uid = n;
+};
 export const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 export function formatMs(ms) {

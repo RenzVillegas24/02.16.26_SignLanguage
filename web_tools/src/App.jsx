@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
-import { uid, parseEIJson, parseLabelsFile, buildEIJson, downloadJSON, simpleHash, formatMs } from './utils/parse';
+import { uid, syncUid, parseEIJson, parseLabelsFile, buildEIJson, downloadJSON, simpleHash, formatMs } from './utils/parse';
 import { SENSOR_COLORS, CATEGORY_COLORS } from './utils/colors';
 import { pickBestChannels } from './utils/algorithms';
 import DualRange from './components/DualRange';
@@ -466,8 +466,8 @@ export default function App() {
       const sampleEntries = [];
 
       samples.forEach((s, i) => {
-        const sid = Number.isFinite(Number(s.id)) ? Number(s.id) : (i + 1);
-        const rel = `samples/${sid}.json`;
+        const sid = s.id ?? uid();
+        const rel = `samples/${i + 1}.json`;
         sampleEntries.push({ id: sid, file: rel });
 
         // Keep project sample payload lean to avoid allocation overflow.
@@ -520,13 +520,81 @@ export default function App() {
 
   const openProject = useCallback(async (file) => {
     try {
+      const k = (v) => String(v);
+      const enforceUniqueAndRepairRefs = (loadedSamples, state) => {
+        // normalizeSample already gave every sample a fresh uid().
+        // _loadedId holds the original persisted id for building the remapping.
+        const items = loadedSamples.map((s) => ({
+          s,
+          oldId: s._loadedId ?? s.id,  // original saved id
+          newId: s.id,                  // already-fresh id from normalizeSample
+        }));
+
+        const oldToAnyNew = new Map();
+        const oldToBaseNew = new Map();
+        items.forEach((it) => {
+          const oldKey = k(it.oldId);
+          if (!oldToAnyNew.has(oldKey)) oldToAnyNew.set(oldKey, it.newId);
+          if (!it.s.splitBaseId && !oldToBaseNew.has(oldKey)) oldToBaseNew.set(oldKey, it.newId);
+        });
+
+        const mapId = (id, preferBase = false) => {
+          const key = k(id);
+          if (preferBase && oldToBaseNew.has(key)) return oldToBaseNew.get(key);
+          if (oldToAnyNew.has(key)) return oldToAnyNew.get(key);
+          return null;
+        };
+
+        const repairedSamples = items.map((it) => {
+          const { _loadedId, ...rest } = it.s;  // strip temp field
+          const nextSplitBase = rest.splitBaseId != null
+            ? (mapId(rest.splitBaseId, true) ?? mapId(rest.splitBaseId, false))
+            : rest.splitBaseId;
+          return { ...rest, splitBaseId: nextSplitBase };
+        });
+
+        const remappedSelected = Array.isArray(state.selectedIds)
+          ? state.selectedIds.map(id => mapId(id, false)).filter(Boolean)
+          : [];
+        const remappedActive = state.activeId != null ? (mapId(state.activeId, false) ?? null) : null;
+
+        const remappedHighlights = {};
+        const srcHighlights = state.splitHighlightsByBase && typeof state.splitHighlightsByBase === 'object'
+          ? state.splitHighlightsByBase
+          : {};
+
+        Object.entries(srcHighlights).forEach(([baseId, meta]) => {
+          const mappedBaseId = mapId(baseId, true) ?? mapId(baseId, false);
+          if (mappedBaseId == null || !meta) return;
+          remappedHighlights[mappedBaseId] = {
+            ...meta,
+            baseId: mappedBaseId,
+            segments: (meta.segments || []).map(seg => ({
+              ...seg,
+              sampleId: seg.sampleId != null ? (mapId(seg.sampleId, false) ?? seg.sampleId) : seg.sampleId,
+            })),
+          };
+        });
+
+        return {
+          samples: repairedSamples,
+          selectedIds: remappedSelected,
+          activeId: remappedActive,
+          splitHighlightsByBase: remappedHighlights,
+        };
+      };
+
       const normalizeSample = (s) => {
         if (!s || !Array.isArray(s.values) || !Array.isArray(s.sensors)) return null;
         const interval = Number(s.interval_ms) || 33.33;
         const values = s.values;
+        // IMPORTANT: do NOT keep the old numeric id — always generate a fresh one.
+        // The old id is preserved in _loadedId so enforceUniqueAndRepairRefs can
+        // build a correct old→new mapping for splitBaseId and splitHighlights.
         return {
           ...s,
-          id: Number.isFinite(Number(s.id)) ? Number(s.id) : uid(),
+          _loadedId: s.id,   // stash original for reference repair
+          id: uid(),         // always fresh — prevents collision after project reload
           interval_ms: interval,
           values,
           duration_ms: Number.isFinite(Number(s.duration_ms)) ? Number(s.duration_ms) : values.length * interval,
@@ -574,16 +642,19 @@ export default function App() {
         nextSamples = nextSamplesRaw.map(normalizeSample).filter(Boolean);
       }
 
+      const repaired = enforceUniqueAndRepairRefs(nextSamples, st || {});
+      nextSamples = repaired.samples;
+
       setSamples(nextSamples);
-      setSelectedIds(new Set(Array.isArray(st.selectedIds) ? st.selectedIds : []));
-      setActiveId(st.activeId ?? null);
+      setSelectedIds(new Set(repaired.selectedIds));
+      setActiveId(repaired.activeId);
       setFilterLabel(st.filterLabel || 'all');
       setFilterStatus(st.filterStatus || 'all');
       setFilterCategory(st.filterCategory || 'all');
       setTimeRange(Array.isArray(st.timeRange) && st.timeRange.length === 2 ? st.timeRange : [0, 100]);
       setTab(st.tab || 'waveform');
       setSidebarViewMode(st.sidebarViewMode === 'grid' ? 'grid' : 'list');
-      setSplitHighlightsByBase(st.splitHighlightsByBase && typeof st.splitHighlightsByBase === 'object' ? st.splitHighlightsByBase : {});
+      setSplitHighlightsByBase(repaired.splitHighlightsByBase);
       setSplitHighlightSensors(
         Array.isArray(st.splitHighlightSensors)
           ? st.splitHighlightSensors
