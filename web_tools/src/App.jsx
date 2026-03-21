@@ -1,5 +1,11 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
+import {
+  Save, FolderOpen, Package, Upload, FileJson,
+  Scissors, GitMerge, Fingerprint, Download,
+  List, LayoutGrid, Zap, ChevronRight,
+  CheckSquare, Square, Trash2, Filter,
+} from 'lucide-react';
 import { uid, syncUid, parseEIJson, parseLabelsFile, buildEIJson, downloadJSON, simpleHash, formatMs } from './utils/parse';
 import { SENSOR_COLORS, CATEGORY_COLORS } from './utils/colors';
 import { pickBestChannels } from './utils/algorithms';
@@ -9,6 +15,7 @@ import LabelsModal from './components/LabelsModal';
 import WaveformViewer from './components/WaveformViewer';
 import SampleCard from './components/SampleCard';
 import SplitHighlightsViewer from './components/SplitHighlightsViewer';
+import LoadingOverlay from './components/LoadingOverlay';
 
 // ─── ZIP loader ────────────────────────────────────────────────────────────
 async function loadZip(file) {
@@ -100,7 +107,7 @@ export default function App() {
   const [tab, setTab] = useState('waveform');
   const [toast, setToast] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(null); // null | { label, sub, count, total }
   const [sidebarViewMode, setSidebarViewMode] = useState('list'); // 'list' | 'grid'
   const [splitHighlightsByBase, setSplitHighlightsByBase] = useState({});
   const [splitHighlightSensors, setSplitHighlightSensors] = useState([]);
@@ -185,18 +192,19 @@ export default function App() {
 
   // ── ZIP import ─────────────────────────────────────────────────────────────
   const handleZip = useCallback(async (file) => {
-    setLoading(true);
+    setLoading({ label: 'Reading ZIP', sub: file.name });
     try {
       const { manifest, samples: newSamples } = await loadZip(file);
       if (manifest.length) labelsManifestRef.current = manifest;
-      if (!newSamples.length) { showToast('No valid sample .json files found in ZIP', 'error'); setLoading(false); return; }
+      if (!newSamples.length) { showToast('No valid sample .json files found in ZIP', 'error'); setLoading(null); return; }
+      setLoading({ label: 'Importing samples', sub: `${newSamples.length} samples found`, count: newSamples.length, total: newSamples.length });
       setSamples(p => [...p, ...newSamples]);
       if (newSamples.length > 0) setActiveId(newSamples[0].id);
       showToast(`Loaded ${newSamples.length} samples${manifest.length ? ` · ${manifest.length} manifest entries` : ''}`, 'success');
     } catch (err) {
       showToast(`ZIP error: ${err.message}`, 'error');
     }
-    setLoading(false);
+    setLoading(null);
   }, [showToast]);
 
   // ── Plain files ────────────────────────────────────────────────────────────
@@ -244,7 +252,76 @@ export default function App() {
   const activate = (id) => setActiveId(prev => prev === id ? null : id);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
-  const del = (id) => { setSamples(p => p.filter(s => s.id !== id)); setSelectedIds(p => { const n = new Set(p); n.delete(id); return n; }); if (activeId === id) setActiveId(null); };
+
+  // Smart delete:
+  // • Normal sample → just remove it.
+  // • Segment (has splitBaseId) → remove ONLY that segment from the samples list,
+  //   remove its entry from the highlights segments array, and keep all other
+  //   siblings intact. Only when the LAST sibling is deleted does the source
+  //   get un-hidden and the highlights entry get cleaned up.
+  const del = useCallback((id) => {
+    const target = samples.find(s => s.id === id);
+    if (!target) return;
+
+    if (target.splitBaseId) {
+      const baseId = target.splitBaseId;
+
+      // All siblings in this split group (excluding the one being deleted)
+      const remainingSiblings = samples.filter(
+        s => s.splitBaseId === baseId && s.id !== id
+      );
+      const isLastSegment = remainingSiblings.length === 0;
+
+      // Remove only this segment; if it was the last one also restore the source
+      setSamples(prev =>
+        prev
+          .filter(s => s.id !== id)
+          .map(s => s.id === baseId && isLastSegment
+            ? { ...s, hiddenAfterSplit: false }   // restore source when no segments left
+            : s
+          )
+      );
+
+      // Update (or remove) the highlights entry
+      setSplitHighlightsByBase(prev => {
+        if (isLastSegment) {
+          // Last segment gone — clean up the whole entry
+          const next = { ...prev };
+          delete next[baseId];
+          return next;
+        }
+        // Partial removal — keep the entry but drop this segment from it
+        const entry = prev[baseId];
+        if (!entry) return prev;
+        return {
+          ...prev,
+          [baseId]: {
+            ...entry,
+            segments: entry.segments.filter(seg => seg.sampleId !== id),
+          },
+        };
+      });
+
+      setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+
+      if (activeId === id) {
+        // Activate next sibling if available, else the source
+        const nextActive = remainingSiblings[0]?.id ?? (isLastSegment ? baseId : null);
+        setActiveId(nextActive);
+      }
+
+      if (isLastSegment) {
+        showToast('Last segment deleted — source sample restored', 'info');
+      } else {
+        showToast(`Segment deleted — ${remainingSiblings.length} segment${remainingSiblings.length !== 1 ? 's' : ''} remaining`, 'info');
+      }
+    } else {
+      // Plain delete for non-segment samples
+      setSamples(prev => prev.filter(s => s.id !== id));
+      setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      if (activeId === id) setActiveId(null);
+    }
+  }, [samples, activeId, showToast]);
   const rename = (id, label) => setSamples(p => p.map(s => s.id === id ? { ...s, label } : s));
   const toggleEnabled = (id) => setSamples(p => p.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s));
   const toggleCategory = (id) => setSamples(p => p.map(s => s.id === id ? { ...s, category: s.category === 'testing' ? 'training' : 'testing' } : s));
@@ -461,6 +538,7 @@ export default function App() {
   };
 
   const saveProject = async () => {
+    setLoading({ label: 'Saving project', sub: `${samples.length} samples` });
     try {
       const zip = new JSZip();
       const sampleEntries = [];
@@ -469,13 +547,7 @@ export default function App() {
         const sid = s.id ?? uid();
         const rel = `samples/${i + 1}.json`;
         sampleEntries.push({ id: sid, file: rel });
-
-        // Keep project sample payload lean to avoid allocation overflow.
-        const samplePayload = {
-          ...s,
-          id: sid,
-          raw: undefined,
-        };
+        const samplePayload = { ...s, id: sid, raw: undefined };
         zip.file(rel, JSON.stringify(samplePayload));
       });
 
@@ -487,38 +559,28 @@ export default function App() {
           samples: sampleEntries,
           selectedIds: [...selectedIds],
           activeId,
-          filterLabel,
-          filterStatus,
-          filterCategory,
-          timeRange,
-          tab,
-          sidebarViewMode,
-          splitHighlightsByBase,
-          splitHighlightSensors,
+          filterLabel, filterStatus, filterCategory, timeRange, tab,
+          sidebarViewMode, splitHighlightsByBase, splitHighlightSensors,
           visibleSampleTypes: [...visibleSampleTypes],
           labelsManifest: labelsManifestRef.current,
         },
       };
 
       zip.file('project.json', JSON.stringify(manifest));
-
       const blob = await zip.generateAsync({ type: 'blob' });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const url = URL.createObjectURL(blob);
-      const a = Object.assign(document.createElement('a'), {
-        href: url,
-        download: `ei_studio_project_${stamp}.eisproj.zip`,
-      });
-      a.click();
+      Object.assign(document.createElement('a'), { href: url, download: `ei_studio_project_${stamp}.eisproj.zip` }).click();
       URL.revokeObjectURL(url);
-
       showToast(`Project saved (${samples.length} samples)`, 'success');
     } catch (err) {
       showToast(`Save project failed: ${err.message}`, 'error');
     }
+    setLoading(null);
   };
 
   const openProject = useCallback(async (file) => {
+    setLoading({ label: 'Opening project', sub: file.name });
     try {
       const k = (v) => String(v);
       const enforceUniqueAndRepairRefs = (loadedSamples, state) => {
@@ -678,6 +740,7 @@ export default function App() {
     } catch (err) {
       showToast(`Open project failed: ${err.message}`, 'error');
     }
+    setLoading(null);
   }, [showToast]);
 
   const activeBaseId = activeSample ? (activeSample.splitBaseId || activeSample.id) : null;
@@ -742,8 +805,8 @@ export default function App() {
 
   // ── Batch split: selected non-ref data samples ─────────────────────────────
   const openBatchSplit = () => {
-    const eligible = selectedSamples.filter(s => !s.fromLabels && s.values.length > 10);
-    if (eligible.length < 2) { showToast('Select 2+ data samples for batch split', 'error'); return; }
+    const eligible = selectedSamples.filter(s => !s.fromLabels && !s.splitBaseId && s.values.length > 10);
+    if (eligible.length < 2) { showToast('Select 2+ non-segment data samples for batch split', 'error'); return; }
     setBatchSplitTargets(eligible);
   };
 
@@ -760,50 +823,143 @@ export default function App() {
     });
   };
 
-  const Btn = (bg, fg, disabled = false) => ({ background: disabled ? '#0d1625' : bg, color: disabled ? '#1e293b' : fg, border: 'none', borderRadius: 5, padding: '5px 11px', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', whiteSpace: 'nowrap', fontWeight: 600, opacity: disabled ? 0.5 : 1 });
+  // ── Icon button helpers ──────────────────────────────────────────────────
+  const Btn = (bg, fg, disabled = false) => ({
+    background: disabled ? '#0d1625' : bg, color: disabled ? '#1e293b' : fg,
+    border: 'none', borderRadius: 5, padding: '5px 11px',
+    cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 11,
+    fontFamily: 'inherit', whiteSpace: 'nowrap', fontWeight: 600, opacity: disabled ? 0.5 : 1,
+  });
+
+  // Top bar icon button
+  const TopBtn = ({ icon, label, onClick, disabled, color = '#94a3b8', bg = '#111827', border = '#1e293b', title }) => (
+    <button onClick={onClick} disabled={disabled} title={title}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        background: disabled ? '#0a0f1a' : bg,
+        border: `1px solid ${disabled ? '#1a2030' : border}`,
+        color: disabled ? '#1e293b' : color,
+        borderRadius: 6, padding: '5px 10px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+        whiteSpace: 'nowrap', opacity: disabled ? 0.5 : 1,
+        transition: 'opacity 0.15s',
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+
+  // Sidebar action button
+  const SideBtn = ({ icon, label, onClick, disabled, color = '#94a3b8', bg = '#111827', fullWidth }) => (
+    <button onClick={onClick} disabled={disabled}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+        ...(fullWidth ? { width: '100%' } : { flex: 1 }),
+        background: disabled ? '#0a0f1a' : bg,
+        border: `1px solid ${disabled ? '#1a2030' : '#1e293b'}`,
+        color: disabled ? '#1e293b' : color,
+        borderRadius: 5, padding: '4px 6px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
+        whiteSpace: 'nowrap', opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+
+  // Inline action icon+label button (used in waveform bar)
+  const IcoBtn = ({ icon, label, onClick, color = '#94a3b8', bg = '#111827', border = '#1e293b' }) => (
+    <button onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        background: bg, border: `1px solid ${border}`,
+        color, borderRadius: 6, padding: '5px 10px',
+        cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
 
   return (
     <div style={{ fontFamily: "'JetBrains Mono', monospace", background: '#060d1a', minHeight: '100vh', color: '#f1f5f9' }}>
 
       {/* TOP BAR */}
-      <div style={{ background: '#020810', borderBottom: '1px solid #1e293b', padding: '0 16px', display: 'flex', alignItems: 'center', gap: 10, height: 48, flexShrink: 0 }}>
-        <span style={{ fontSize: 16, fontWeight: 900, letterSpacing: -1, color: '#38bdf8' }}>⚡ EI<span style={{ color: '#60a5fa' }}>Studio</span></span>
-        <span style={{ fontSize: 9, color: '#1e3a5f', borderLeft: '1px solid #1e293b', paddingLeft: 10, letterSpacing: 1 }}>EDGE IMPULSE DATA MANAGER</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 9, color: '#1e3a5f' }}>{samples.length} samples · {sensors.length} ch</span>
-        <button onClick={saveProject} disabled={!samples.length} style={{ ...Btn('#111827', '#c4b5fd', !samples.length), border: '1px solid #4c1d95', fontSize: 12 }}>💾 Save Project</button>
-        <button onClick={() => projectRef.current?.click()} style={{ ...Btn('#1f2937', '#d1d5db'), border: '1px solid #374151', fontSize: 12 }}>📁 Open Project</button>
-        <button onClick={() => zipRef.current?.click()} style={{ ...Btn('#0d2a1a', '#34d399'), border: '1px solid #065f46', fontSize: 12 }}>📦 Import ZIP</button>
-        <button
+      <div style={{
+        background: '#020810',
+        borderBottom: '1px solid #141f35',
+        padding: '0 14px',
+        display: 'flex', alignItems: 'center', gap: 8,
+        height: 50, flexShrink: 0,
+        boxShadow: '0 1px 0 #141f35',
+      }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 6 }}>
+          <Zap size={18} color="#38bdf8" strokeWidth={2.5} />
+          <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.5, color: '#f1f5f9' }}>
+            EI<span style={{ color: '#38bdf8' }}>Studio</span>
+          </span>
+        </div>
+        <div style={{ width: 1, height: 24, background: '#1e293b', marginRight: 2 }} />
+
+        {/* File actions */}
+        <TopBtn icon={<Save size={13} />} label="Save" onClick={saveProject} disabled={!samples.length}
+          color="#a78bfa" bg="#1a103a" border="#4c1d95" title="Save project to .eisproj.zip" />
+        <TopBtn icon={<FolderOpen size={13} />} label="Open" onClick={() => projectRef.current?.click()}
+          color="#d1d5db" bg="#1a2030" border="#374151" title="Open saved project" />
+        <div style={{ width: 1, height: 24, background: '#1e293b' }} />
+        <TopBtn icon={<Package size={13} />} label="Import ZIP" onClick={() => zipRef.current?.click()}
+          color="#34d399" bg="#0a2018" border="#065f46" title="Import EdgeImpulse dataset ZIP" />
+        <TopBtn
+          icon={<Download size={13} />} label="Export ZIP"
           onClick={exportSplitSamplesZip}
           disabled={!samples.some(s => s.splitBaseId && !s.fromLabels && s.values.length > 0)}
-          style={{ ...Btn('#1f2937', '#93c5fd', !samples.some(s => s.splitBaseId && !s.fromLabels && s.values.length > 0)), border: '1px solid #1e3a5f', fontSize: 12 }}
-        >
-          📤 Export ZIP
-        </button>
-        <input
-          ref={projectRef}
-          type="file"
-          accept=".eisproj,.eisproj.json,.json,.zip,.eisproj.zip"
-          style={{ display: 'none' }}
-          onChange={e => { if (e.target.files[0]) openProject(e.target.files[0]); e.target.value = ''; }}
+          color="#93c5fd" bg="#0d1e30" border="#1e3a5f"
+          title="Export split samples to ZIP"
         />
-        <input ref={zipRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleZip(e.target.files[0]); e.target.value = ''; }} />
-        <button onClick={() => fileRef.current?.click()} style={{ ...Btn('#0d2040', '#60a5fa'), border: '1px solid #1e3a5f' }}>📂 Open Files</button>
-        <input ref={fileRef} type="file" accept=".json,.labels" multiple style={{ display: 'none' }} onChange={e => { processFiles(Array.from(e.target.files)); e.target.value = ''; }} />
+        <TopBtn icon={<FileJson size={13} />} label="Files" onClick={() => fileRef.current?.click()}
+          color="#60a5fa" bg="#0d1e30" border="#1e3a5f" title="Open individual .json/.labels files" />
+
+        <div style={{ flex: 1 }} />
+
+        {/* Stats */}
+        <div style={{ display: 'flex', gap: 12, fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>
+          <span>{samples.length} <span style={{ color: '#1e3a5f' }}>samples</span></span>
+          <span>{sensors.length} <span style={{ color: '#1e3a5f' }}>channels</span></span>
+        </div>
+
+        {/* Hidden file inputs */}
+        <input ref={projectRef} type="file" accept=".eisproj,.eisproj.json,.json,.zip,.eisproj.zip"
+          style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) openProject(e.target.files[0]); e.target.value = ''; }} />
+        <input ref={zipRef} type="file" accept=".zip" style={{ display: 'none' }}
+          onChange={e => { if (e.target.files[0]) handleZip(e.target.files[0]); e.target.value = ''; }} />
+        <input ref={fileRef} type="file" accept=".json,.labels" multiple style={{ display: 'none' }}
+          onChange={e => { processFiles(Array.from(e.target.files)); e.target.value = ''; }} />
       </div>
 
-      {/* LOADING */}
-      {loading && (
-        <div style={{ position: 'fixed', inset: 0, background: '#000b', zIndex: 500, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <div style={{ fontSize: 32 }}>⏳</div>
-          <div style={{ fontSize: 14, color: '#38bdf8', fontWeight: 700 }}>Reading ZIP…</div>
-        </div>
-      )}
+      {/* LOADING OVERLAY */}
+      <LoadingOverlay loading={loading} />
 
       {/* TOAST */}
       {toast && (
-        <div style={{ position: 'fixed', top: 56, right: 16, zIndex: 400, background: toast.type === 'success' ? '#052e16' : toast.type === 'error' ? '#450a0a' : '#0c1a33', border: `1px solid ${toast.type === 'success' ? '#22c55e' : toast.type === 'error' ? '#ef4444' : '#3b82f6'}`, color: '#f1f5f9', borderRadius: 8, padding: '10px 18px', fontSize: 12, boxShadow: '0 8px 32px #000a', maxWidth: 420 }}>
+        <div style={{
+          position: 'fixed', top: 60, right: 16, zIndex: 400,
+          background: toast.type === 'success' ? '#041e10' : toast.type === 'error' ? '#1f0a0a' : '#0a1628',
+          border: `1px solid ${toast.type === 'success' ? '#16a34a' : toast.type === 'error' ? '#dc2626' : '#2563eb'}`,
+          color: toast.type === 'success' ? '#4ade80' : toast.type === 'error' ? '#f87171' : '#93c5fd',
+          borderRadius: 8, padding: '10px 16px', fontSize: 12,
+          boxShadow: '0 8px 32px #00000066', maxWidth: 400,
+          display: 'flex', alignItems: 'center', gap: 8,
+          fontFamily: 'inherit',
+          animation: 'slideIn 0.2s ease',
+        }}>
+          <style>{`@keyframes slideIn { from { opacity:0; transform:translateX(12px); } to { opacity:1; transform:translateX(0); } }`}</style>
+          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0 }} />
           {toast.msg}
         </div>
       )}
@@ -819,24 +975,44 @@ export default function App() {
         <LabelsModal labelsData={labelsPayload} onImport={importLabelsEntries} onClose={() => setLabelsPayload(null)} />
       )}
 
-      <div style={{ display: 'flex', height: 'calc(100vh - 48px)' }}>
+      <div style={{ display: 'flex', height: 'calc(100vh - 50px)' }}>
 
         {/* ── SIDEBAR ── */}
         <div style={{ width: sidebar.width, borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', background: '#020810', flexShrink: 0, position: 'relative' }}>
 
           {/* Drop zone */}
-          <div onDrop={handleDrop} onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
+          <div
+            onDrop={handleDrop}
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
             onClick={() => zipRef.current?.click()}
-            style={{ margin: 8, padding: 10, borderRadius: 8, border: `2px dashed ${dragOver ? '#34d399' : '#1e293b'}`, textAlign: 'center', cursor: 'pointer', background: dragOver ? '#0a2a1a' : 'transparent', transition: 'all 0.2s' }}>
-            <div style={{ fontSize: 18 }}>📦</div>
-            <div style={{ fontSize: 9, color: dragOver ? '#34d399' : '#334155', marginTop: 2 }}>
-              Drop .zip or click · info.labels + testing/ + training/
+            style={{
+              margin: '8px 8px 4px',
+              padding: '10px 8px',
+              borderRadius: 8,
+              border: `2px dashed ${dragOver ? '#34d399' : '#1a2a3a'}`,
+              display: 'flex', alignItems: 'center', gap: 8,
+              cursor: 'pointer',
+              background: dragOver ? '#071a10' : 'transparent',
+              transition: 'all 0.2s',
+            }}
+          >
+            <Package size={16} color={dragOver ? '#34d399' : '#1e3a5f'} strokeWidth={1.5} />
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: dragOver ? '#34d399' : '#334155' }}>
+                Drop or click to import
+              </div>
+              <div style={{ fontSize: 8, color: '#1e3a5f', marginTop: 1 }}>
+                .zip · info.labels + testing/ + training/
+              </div>
             </div>
           </div>
 
           {/* Filters */}
           <div style={{ padding: '0 8px 6px', borderBottom: '1px solid #1e293b', marginBottom: 5 }}>
-            <div style={{ fontSize: 9, color: '#1e3a5f', marginBottom: 4, letterSpacing: 1 }}>FILTERS</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, color: '#1e3a5f', marginBottom: 5, letterSpacing: 1 }}>
+              <Filter size={10} color="#1e3a5f" /> FILTERS
+            </div>
             <select value={filterLabel} onChange={e => setFilterLabel(e.target.value)}
               style={{ width: '100%', background: '#080f1e', color: '#94a3b8', border: '1px solid #1e293b', borderRadius: 5, padding: '4px 6px', fontSize: 10, marginBottom: 4, fontFamily: 'inherit' }}>
               {allLabels.map(l => <option key={l} value={l}>{l}{l !== 'all' ? ` (${(groupedByLabel[l] || []).length})` : ` (${samples.length})`}</option>)}
@@ -952,26 +1128,38 @@ export default function App() {
           {/* Actions + view mode toggle */}
           <div style={{ padding: '0 8px 5px' }}>
             <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginBottom: 4 }}>
-              <button onClick={selectAll} style={Btn('#1e293b', '#64748b')}>All</button>
-              <button onClick={selectNone} style={Btn('#1e293b', '#64748b')}>None</button>
-              <button onClick={combine} disabled={selectedIds.size < 2} style={Btn('#1d4ed8', '#fff', selectedIds.size < 2)}>Merge</button>
-              <button onClick={dedup} style={Btn('#6d28d9', '#c4b5fd')}>DeDup</button>
-              <button onClick={exportSelected} disabled={!selectedIds.size} style={Btn('#065f46', '#34d399', !selectedIds.size)}>Export ZIP</button>
+              <SideBtn icon={<CheckSquare size={11} />} label="All" onClick={selectAll} />
+              <SideBtn icon={<Square size={11} />} label="None" onClick={selectNone} />
+              <SideBtn icon={<GitMerge size={11} />} label="Merge" onClick={combine}
+                disabled={selectedIds.size < 2} color="#60a5fa" bg="#0d2040" />
+              <SideBtn icon={<Fingerprint size={11} />} label="DeDup" onClick={dedup}
+                color="#c4b5fd" bg="#1a0d3a" />
+              <SideBtn icon={<Upload size={11} />} label="Export" onClick={exportSelected}
+                disabled={!selectedIds.size} color="#34d399" bg="#0a2018" />
             </div>
-            <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
-              {selectedIds.size >= 2 && (
-                <button onClick={openBatchSplit} style={Btn('#92400e', '#fbbf24')}>✂️ Batch Split ({selectedIds.size})</button>
-              )}
-            </div>
+            {selectedIds.size >= 2 && (
+              <div style={{ marginBottom: 4 }}>
+                <SideBtn
+                  icon={<Scissors size={11} />}
+                  label={`Batch Split (${selectedIds.size})`}
+                  onClick={openBatchSplit}
+                  color="#fbbf24" bg="#1a1008" fullWidth
+                />
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 9, color: '#1e3a5f' }}>{filteredSamples.length}/{samples.length} · {selectedIds.size}✓</span>
+              <span style={{ fontSize: 9, color: '#1e3a5f', fontFamily: 'monospace' }}>
+                {filteredSamples.length}/{samples.length} · {selectedIds.size} sel
+              </span>
               <div style={{ display: 'flex', gap: 2 }}>
-                {[['list', '☰'], ['grid', '⊞']].map(([m, icon]) => (
-                  <button key={m} onClick={() => setSidebarViewMode(m)}
-                    style={{ background: sidebarViewMode === m ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === m ? '#3b82f6' : '#1e293b'}`, color: sidebarViewMode === m ? '#60a5fa' : '#334155', borderRadius: 4, padding: '2px 6px', fontSize: 11, cursor: 'pointer' }}>
-                    {icon}
-                  </button>
-                ))}
+                <button onClick={() => setSidebarViewMode('list')} title="List view"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'list' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'list' ? '#3b82f6' : '#1e293b'}`, color: sidebarViewMode === 'list' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  <List size={12} />
+                </button>
+                <button onClick={() => setSidebarViewMode('grid')} title="Grid view"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'grid' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'grid' ? '#3b82f6' : '#1e293b'}`, color: sidebarViewMode === 'grid' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  <LayoutGrid size={12} />
+                </button>
               </div>
             </div>
           </div>
@@ -1021,14 +1209,26 @@ export default function App() {
             {tab === 'waveform' && (
               <div>
                 {activeSample && !activeSample.fromLabels && activeSample.values.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 12px', background: '#080f1e', border: '1px solid #1e3a5f', borderRadius: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 12px', background: '#080f1e', border: `1px solid ${activeSample.splitBaseId ? '#1e3a5f' : '#1e3a5f'}`, borderRadius: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, flex: 1, minWidth: 0 }}>
-                      Active: <span style={{ color: '#f1f5f9' }}>{activeSample.label}</span>
+                      <span style={{ color: '#94a3b8', fontWeight: 400 }}>Active: </span>
+                      <span style={{ color: '#f1f5f9' }}>{activeSample.label}</span>
                       {activeSample.sampleName && <span style={{ color: '#475569', fontWeight: 400 }}> · {activeSample.sampleName}</span>}
+                      {activeSample.splitBaseId && (
+                        <span style={{ marginLeft: 8, fontSize: 9, background: '#0d1f1a', color: '#2dd4bf', border: '1px solid #0f4a40', borderRadius: 3, padding: '1px 6px', fontWeight: 400 }}>
+                          segment — cannot be split further
+                        </span>
+                      )}
                     </span>
-                    <button onClick={() => setSplitTarget(activeSample)} style={{ ...Btn('#1a0f00', '#fbbf24'), border: '1px solid #92400e' }}>✂️ Split</button>
-                    <button onClick={() => del(activeSample.id)} style={{ ...Btn('#450a0a', '#f87171'), border: '1px solid #7f1d1d' }}>🗑 Delete</button>
-                    <button onClick={() => downloadJSON(buildEIJson(activeSample), activeSample.filename)} style={Btn('#065f46', '#34d399')}>Export</button>
+                    {/* Only show Split for non-segment samples */}
+                    {!activeSample.splitBaseId && (
+                      <IcoBtn icon={<Scissors size={12} />} label="Split" onClick={() => setSplitTarget(activeSample)}
+                        color="#fbbf24" bg="#1a1008" border="#78350f" />
+                    )}
+                    <IcoBtn icon={<Trash2 size={12} />} label="Delete" onClick={() => del(activeSample.id)}
+                      color="#f87171" bg="#1a0808" border="#7f1d1d" />
+                    <IcoBtn icon={<Download size={12} />} label="Export" onClick={() => downloadJSON(buildEIJson(activeSample), activeSample.filename)}
+                      color="#34d399" bg="#091a12" border="#065f46" />
                   </div>
                 )}
                 <WaveformViewer samples={viewSamples} sensors={sensors} />

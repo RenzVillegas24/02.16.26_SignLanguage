@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Scissors, RefreshCw, X, Shuffle, Trash2 } from 'lucide-react';
 import { runAutoDetect, pickBestChannels, batchAutoSplit } from '../utils/algorithms';
 import { SENSOR_COLORS } from '../utils/colors';
 import { formatMs } from '../utils/parse';
@@ -505,8 +506,27 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
     });
   };
 
-  // Cuts to show in preview — if shift enabled, show the shifted preview
+  // Cuts to show in single-sample preview — shifted if enabled
   const previewCuts = enableShift && shiftPreview.length ? shiftPreview : cuts;
+
+  // For batch: apply simulated shift to each sample's cuts for the preview display
+  const batchPreviewStates = useMemo(() => {
+    if (!isBatch || !enableShift) return batchStates;
+    const lo = shiftUnit === 'ms' ? shiftMin / (primarySample.interval_ms || 33.33) : shiftMin;
+    const hi = shiftUnit === 'ms' ? shiftMax / (primarySample.interval_ms || 33.33) : shiftMax;
+    const loR = Math.min(lo, hi), hiR = Math.max(lo, hi);
+    const shifted = {};
+    Object.entries(batchStates).forEach(([id, state]) => {
+      const smpl = batchSamples.find(s => s.id === id);
+      if (!smpl || !state.cuts.length) { shifted[id] = state; return; }
+      const shiftedCuts = state.cuts.map(c => {
+        const s = Math.round(loR + Math.random() * (hiR - loR));
+        return Math.max(1, Math.min(smpl.values.length - 1, c + s));
+      }).sort((a, b) => a - b);
+      shifted[id] = { ...state, cuts: shiftedCuts };
+    });
+    return shifted;
+  }, [isBatch, enableShift, batchStates, batchSamples, shiftMin, shiftMax, shiftUnit, primarySample.interval_ms]);
 
   const padInfo = enablePad ? { min: padMin, max: padMax, unit: padUnit, random: padRandom } : null;
 
@@ -522,21 +542,26 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
 
         {/* Header */}
         <div style={{ padding: '13px 18px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 10, position: 'sticky', top: 0, background: '#0a1628', zIndex: 1 }}>
+          <Scissors size={16} color="#60a5fa" strokeWidth={2} />
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>
-              {isBatch ? `✂️ Batch Split — ${batchSamples.length} samples` : '✂️ Smart Split'}
+              {isBatch ? `Batch Split — ${batchSamples.length} samples` : 'Smart Split'}
             </div>
             <div style={{ fontSize: 10, color: '#475569' }}>
               {isBatch ? `Preview: ${label}` : label} · {N} pts · {formatMs(N * interval_ms)}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#475569', fontSize: 20, cursor: 'pointer' }}>✕</button>
+          <button onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', color: '#475569', width: 28, height: 28, cursor: 'pointer', borderRadius: 4 }}
+            onMouseEnter={e => e.currentTarget.style.color = '#f1f5f9'}
+            onMouseLeave={e => e.currentTarget.style.color = '#475569'}>
+            <X size={16} strokeWidth={2} />
+          </button>
         </div>
 
         <div style={{ padding: 16 }}>
           {/* Mode tabs */}
           <div style={{ display: 'flex', gap: 3, background: '#050c1a', borderRadius: 8, padding: 4, marginBottom: 14 }}>
-            {[['auto', '🤖 Auto-Detect'], ['equal', '⚖️ Equal Parts'], ['manual', '✏️ Manual'], ['flat', '📉 Predicted Flat']].map(([m, lbl]) => (
+            {[['auto', 'Auto-Detect'], ['equal', 'Equal Parts'], ['manual', 'Manual'], ['flat', 'Predicted Flat']].map(([m, lbl]) => (
               <button key={m} onClick={() => setMode(m)} style={{
                 flex: 1, background: mode === m ? (m === 'flat' ? '#0a2a0a' : '#0d2040') : 'none',
                 border: `1px solid ${mode === m ? (m === 'flat' ? '#34d399' : '#3b82f6') : 'transparent'}`,
@@ -591,7 +616,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                 {algo !== 'equal' && <Sldr label="Min Gap" value={minGap} min={5} max={Math.floor(N / 2)} onChange={setMinGap} fmt={v => `${v}pts`} />}
               </div>
               <div style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 7, padding: '8px 10px', marginBottom: 10, fontSize: 10, color: '#94a3b8', lineHeight: 1.5 }}>
-                🧮 Estimated samples from windowing: <b style={{ color: '#34d399' }}>{isBatch ? estimatedWindowsBatchTotal : estimatedWindowsPerSample}</b>
+                Estimated windows: <b style={{ color: '#34d399' }}>{isBatch ? estimatedWindowsBatchTotal : estimatedWindowsPerSample}</b>
                 {isBatch
                   ? <span style={{ color: '#64748b' }}> total windows across {batchSamples.length} selected sample{batchSamples.length !== 1 ? 's' : ''}</span>
                   : <span style={{ color: '#64748b' }}> windows for this sample</span>}
@@ -600,8 +625,8 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button onClick={recalc} style={{ background: '#1d4ed8', border: 'none', color: '#fff', borderRadius: 6, padding: '7px 18px', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
-                  ⟳ Recalculate
+                <button onClick={recalc} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1d4ed8', border: 'none', color: '#fff', borderRadius: 6, padding: '7px 18px', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
+                  <RefreshCw size={12} /> Recalculate
                 </button>
                 <span style={{ fontSize: 10, color: '#475569' }}>
                   {cuts.length} cuts → {cuts.length + 1} segments
@@ -679,7 +704,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enableShift ? 10 : 0 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={enableShift} onChange={e => setEnableShift(e.target.checked)} style={{ accentColor: '#f59e0b', width: 13, height: 13 }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: enableShift ? '#fbbf24' : '#64748b' }}>🎲 Random Shift</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: enableShift ? '#fbbf24' : '#64748b' }}>Random Shift</span>
                 </label>
                 {enableShift && (
                   <span style={{ fontSize: 9, color: '#64748b' }}>
@@ -687,8 +712,8 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                   </span>
                 )}
                 {enableShift && (
-                  <button onClick={generateShiftPreview} style={{ background: '#451a03', border: '1px solid #f59e0b55', color: '#fbbf24', borderRadius: 4, padding: '2px 8px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto' }}>
-                    🔀 Resample preview
+                  <button onClick={generateShiftPreview} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#451a03', border: '1px solid #f59e0b55', color: '#fbbf24', borderRadius: 4, padding: '2px 8px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto' }}>
+                    <Shuffle size={10} /> Resample preview
                   </button>
                 )}
               </div>
@@ -732,7 +757,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enablePad ? 10 : 0 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={enablePad} onChange={e => setEnablePad(e.target.checked)} style={{ accentColor: '#a78bfa', width: 13, height: 13 }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: enablePad ? '#a78bfa' : '#64748b' }}>📐 Padding</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: enablePad ? '#a78bfa' : '#64748b' }}>Padding</span>
                 </label>
                 {enablePad && (
                   <span style={{ fontSize: 9, color: '#64748b' }}>
@@ -922,7 +947,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               {/* Shift indicator under canvas */}
               {enableShift && shiftPreview.length > 0 && (
                 <div style={{ marginTop: 5, padding: '5px 10px', background: '#451a0322', border: '1px solid #f59e0b33', borderRadius: 5, fontSize: 9, color: '#fbbf24' }}>
-                  🎲 Preview shows a simulated random shift — actual shifts will differ per split. Cuts shifted by [{shiftMin},{shiftMax}]{shiftUnit}.
+                  Preview shows a simulated random shift — actual shifts will differ per split. Cuts shifted by [{shiftMin},{shiftMax}]{shiftUnit}.
                 </div>
               )}
 
@@ -941,14 +966,25 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                     {keptSegs.length} KEPT SEGMENT{keptSegs.length !== 1 ? 'S' : ''}
                     {removedSegs.size > 0 && <span style={{ color: '#f87171', fontWeight: 400 }}> · {removedSegs.size} removed</span>}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 5 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 5 }}>
                     {keptSegs.map((seg, ki) => {
                       const segValues = values.slice(seg.start, seg.end);
                       return (
                         <div key={seg.idx} style={{ background: '#050c1a', border: `1px solid ${SENSOR_COLORS[ki % SENSOR_COLORS.length]}44`, borderRadius: 7, padding: 8 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
                             <span style={{ fontSize: 10, fontWeight: 700, color: SENSOR_COLORS[ki % SENSOR_COLORS.length] }}>Seg {seg.idx + 1}</span>
-                            <span style={{ fontSize: 9, color: '#475569' }}>{formatMs(segValues.length * interval_ms)}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <span style={{ fontSize: 9, color: '#475569' }}>{formatMs(segValues.length * interval_ms)}</span>
+                              <button
+                                onClick={() => toggleRemove(seg.idx)}
+                                title="Remove this segment"
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: '1px solid #3f1515', color: '#7f1d1d', borderRadius: 3, width: 18, height: 18, cursor: 'pointer', padding: 0, transition: 'all 0.1s' }}
+                                onMouseEnter={e => { e.currentTarget.style.background = '#450a0a'; e.currentTarget.style.color = '#f87171'; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#7f1d1d'; }}
+                              >
+                                <Trash2 size={9} strokeWidth={2} />
+                              </button>
+                            </div>
                           </div>
                           <div style={{ fontSize: 9, color: '#334155', marginBottom: 5 }}>{segValues.length} pts</div>
                           <input value={partLabels[seg.idx] !== undefined ? partLabels[seg.idx] : label}
@@ -972,7 +1008,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           )}
           {isBatch && batchSamples.length > 0 && Object.keys(batchStates).length > 0 && (
             <BatchGraphs 
-              samples={batchSamples} batchStates={batchStates} 
+              samples={batchSamples} batchStates={batchPreviewStates} 
               sensors={sensors} visSensors={visSensors}
               enablePad={enablePad} padMin={padMin} padMax={padMax} padUnit={padUnit} padRandom={padRandom}
               onToggleRemove={handleBatchToggleRemove}
@@ -1005,8 +1041,8 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                   borderRadius: 6, padding: '8px 22px', cursor: 'pointer', fontWeight: 700, fontFamily: 'inherit',
                 }}>
                 {isBatch
-                  ? `✂️ Split ${batchSamples.length} → ${totalKept} total`
-                  : `✂️ Split → ${keptSegs.length} sample${keptSegs.length !== 1 ? 's' : ''}`}
+                  ? `Split ${batchSamples.length} → ${totalKept} total`
+                  : `Split → ${keptSegs.length} sample${keptSegs.length !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>
