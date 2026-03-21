@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { runAutoDetect, pickBestChannels, batchAutoSplit } from '../utils/algorithms';
 import { SENSOR_COLORS } from '../utils/colors';
 import { formatMs } from '../utils/parse';
@@ -9,19 +9,29 @@ import { lastAlgoStore } from '../utils/lastAlgo';
 import { runFlatDetector } from '../utils/flatDetector';
 
 // ─── Batch preview ─────────────────────────────────────────────────────────
-function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, padMin, padMax, padUnit, padRandom, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment }) {
+function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, padMin, padMax, padUnit, padRandom, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample }) {
   const padInfo = enablePad ? { min: padMin, max: padMax, unit: padUnit, random: padRandom } : null;
   return (
     <div style={{ maxHeight: '50vh', overflowY: 'auto', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 16 }}>
       {samples.map((smpl) => {
         const state = batchStates[smpl.id] || { cuts: [], removedSegs: new Set() };
+        const totalSegs = (state.cuts?.length || 0) + 1;
         return (
           <div key={smpl.id} style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', marginBottom: 6 }}>
-              {smpl.label} {smpl.sampleName ? <span style={{ color: '#64748b' }}>· {smpl.sampleName}</span> : ''}
-              <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8 }}>
-                {state.cuts.length + 1 - state.removedSegs.size} / {state.cuts.length + 1} kept
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {smpl.label} {smpl.sampleName ? <span style={{ color: '#64748b' }}>· {smpl.sampleName}</span> : ''}
+                <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8 }}>
+                  {totalSegs - state.removedSegs.size} / {totalSegs} kept
+                </span>
               </span>
+              <button
+                onClick={() => onRemoveSample?.(smpl.id)}
+                style={{ background: '#450a0a', border: '1px solid #7f1d1d', color: '#f87171', borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}
+                title="Remove this sample from batch split"
+              >
+                Remove
+              </button>
             </div>
             <SplitPreviewCanvas
               values={smpl.values} sensors={sensors} interval_ms={smpl.interval_ms}
@@ -35,6 +45,30 @@ function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, pad
               padding={padInfo}
               height={140}
             />
+            <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {Array.from({ length: totalSegs }, (_, i) => {
+                const kept = !state.removedSegs.has(i);
+                return (
+                  <button
+                    key={i}
+                    onClick={() => onToggleRemove(smpl.id, i)}
+                    style={{
+                      background: kept ? '#052e16' : '#450a0a44',
+                      border: `1px solid ${kept ? '#166534' : '#7f1d1d'}`,
+                      color: kept ? '#34d399' : '#f87171',
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: 9,
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                    }}
+                    title={kept ? 'Click to exclude segment' : 'Click to include segment'}
+                  >
+                    S{i + 1} {kept ? '✓' : '✕'}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         );
       })}
@@ -62,6 +96,11 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   const primarySample = sample || samples?.[0];
   const { sensors, values, interval_ms, label } = primarySample;
   const N = values.length;
+  const [removedBatchIds, setRemovedBatchIds] = useState(new Set());
+  const batchInitialized = useRef(false);
+  const batchSamples = useMemo(() => (
+    isBatch ? samples.filter(s => !removedBatchIds.has(s.id)) : []
+  ), [isBatch, samples, removedBatchIds]);
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -220,7 +259,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         const flatRefs = allSamples.filter(s => selectedFlatIds.has(s.id) && s.values?.length > 0);
         if (!selectedCh.length || !flatRefs.length) {
           const emptyStates = {};
-          samples.forEach(smpl => { emptyStates[smpl.id] = { cuts: [], removedSegs: new Set() }; });
+          batchSamples.forEach(smpl => { emptyStates[smpl.id] = { cuts: [], removedSegs: new Set() }; });
           setBatchStates(emptyStates);
           return;
         }
@@ -232,7 +271,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         };
 
         const states = {};
-        samples.forEach(smpl => {
+        batchSamples.forEach(smpl => {
           let refsForSample = flatRefs.filter(r => r.id !== smpl.id).map(r => r.values);
           if (!refsForSample.length) refsForSample = flatRefs.map(r => r.values);
           const res = runFlatDetector(smpl.values, sensors, refsForSample, selectedCh, cfg);
@@ -242,7 +281,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         });
         setBatchStates(states);
       } else {
-        const bRes = batchAutoSplit(samples, sensors, getCfg());
+        const bRes = batchAutoSplit(batchSamples, sensors, getCfg());
         const states = {};
         bRes.forEach(r => {
           let sampleCuts = r.cuts;
@@ -264,16 +303,26 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         setRemovedSegs(new Set());
       }
     }
-  }, [mode, getCfg, values, sensors, N, equalParts, isBatch, samples, allSamples, autoDisableFlat, getFlatRemovedSegs]);
+  }, [mode, getCfg, values, sensors, N, equalParts, isBatch, batchSamples, allSamples, autoDisableFlat, getFlatRemovedSegs]);
 
   useEffect(() => { if (mode !== 'manual') recalc(); }, [mode, recalc]);
+
+  // Ensure batchStates is initialized when batch samples change
+  useEffect(() => {
+    if (isBatch && batchSamples.length > 0 && !batchInitialized.current) {
+      batchInitialized.current = true;
+      recalc();
+    } else if (!isBatch) {
+      batchInitialized.current = false;
+    }
+  }, [isBatch, batchSamples.length, recalc]);
 
   // ── Execute split ──────────────────────────────────────────────────────
   const doSplit = () => {
     if (isBatch) {
       if (!Object.keys(batchStates).length) return;
       const finalBatch = [];
-      samples.forEach(smpl => {
+      batchSamples.forEach(smpl => {
         const state = batchStates[smpl.id];
         if (!state) return;
         const currentCuts = state.cuts || [];
@@ -374,7 +423,10 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
 
   const SI = { background: '#060d1a', color: '#f1f5f9', border: '1px solid #1e293b', borderRadius: 5, padding: '5px 9px', fontSize: 11, boxSizing: 'border-box', fontFamily: 'inherit' };
   const totalKept = isBatch
-    ? Object.values(batchStates).reduce((a, s) => a + (s.cuts.length + 1 - (s.removedSegs?.size || 0)), 0)
+    ? batchSamples.reduce((a, smpl) => {
+        const st = batchStates[smpl.id] || { cuts: [], removedSegs: new Set() };
+        return a + (st.cuts.length + 1 - (st.removedSegs?.size || 0));
+      }, 0)
     : keptSegs.length;
 
   const handleBatchToggleRemove = (smplId, idx) => {
@@ -406,7 +458,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   const handleBatchSplitSegment = (smplId, idx) => {
     setBatchStates(p => {
       const state = p[smplId];
-      const smpl = samples.find(s => s.id === smplId);
+      const smpl = batchSamples.find(s => s.id === smplId);
       if (!state || !smpl) return p;
       const bounds = [0, ...(state.cuts || []), smpl.values.length].sort((a, b) => a - b);
       if (idx < 0 || idx >= bounds.length - 1) return p;
@@ -418,6 +470,19 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         ...p,
         [smplId]: { ...state, cuts: [...state.cuts, mid].sort((a, b) => a - b) },
       };
+    });
+  };
+
+  const handleBatchRemoveSample = (smplId) => {
+    setRemovedBatchIds(p => {
+      const n = new Set(p);
+      n.add(smplId);
+      return n;
+    });
+    setBatchStates(p => {
+      const n = { ...p };
+      delete n[smplId];
+      return n;
     });
   };
 
@@ -440,7 +505,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         <div style={{ padding: '13px 18px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 10, position: 'sticky', top: 0, background: '#0a1628', zIndex: 1 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>
-              {isBatch ? `✂️ Batch Split — ${samples.length} samples` : '✂️ Smart Split'}
+              {isBatch ? `✂️ Batch Split — ${batchSamples.length} samples` : '✂️ Smart Split'}
             </div>
             <div style={{ fontSize: 10, color: '#475569' }}>
               {isBatch ? `Preview: ${label}` : label} · {N} pts · {formatMs(N * interval_ms)}
@@ -762,15 +827,21 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           )}
 
           {/* Batch preview */}
-          {isBatch && Object.keys(batchStates).length > 0 && (
+          {isBatch && batchSamples.length === 0 && (
+            <div style={{ background: '#050c1a', border: '1px solid #7f1d1d55', borderRadius: 10, padding: 12, fontSize: 10, color: '#f87171' }}>
+              No samples left in batch selection.
+            </div>
+          )}
+          {isBatch && batchSamples.length > 0 && Object.keys(batchStates).length > 0 && (
             <BatchGraphs 
-              samples={samples} batchStates={batchStates} 
+              samples={batchSamples} batchStates={batchStates} 
               sensors={sensors} visSensors={visSensors}
               enablePad={enablePad} padMin={padMin} padMax={padMax} padUnit={padUnit} padRandom={padRandom}
               onToggleRemove={handleBatchToggleRemove}
               onCombineLeft={handleBatchCombineLeft}
               onCombineRight={handleBatchCombineRight}
               onSplitSegment={handleBatchSplitSegment}
+              onRemoveSample={handleBatchRemoveSample}
             />
           )}
 
@@ -796,7 +867,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                   borderRadius: 6, padding: '8px 22px', cursor: 'pointer', fontWeight: 700, fontFamily: 'inherit',
                 }}>
                 {isBatch
-                  ? `✂️ Split ${samples.length} → ${totalKept} total`
+                  ? `✂️ Split ${batchSamples.length} → ${totalKept} total`
                   : `✂️ Split → ${keptSegs.length} sample${keptSegs.length !== 1 ? 's' : ''}`}
               </button>
             </div>

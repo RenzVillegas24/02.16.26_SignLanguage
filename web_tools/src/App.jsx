@@ -103,9 +103,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [sidebarViewMode, setSidebarViewMode] = useState('list'); // 'list' | 'grid'
   const [splitHighlightsByBase, setSplitHighlightsByBase] = useState({});
+  const [splitHighlightSensors, setSplitHighlightSensors] = useState([]);
+  const [visibleSampleTypes, setVisibleSampleTypes] = useState(new Set(['unmodified', 'segment']));
 
   const fileRef = useRef();
   const zipRef = useRef();
+  const projectRef = useRef();
   const labelsManifestRef = useRef([]);
   const sidebar = useResizable(295, 180, 620);
 
@@ -123,7 +126,16 @@ export default function App() {
     return [Math.min(...durs), Math.max(...durs)];
   }, [samples]);
 
+  const splitBaseIdSet = useMemo(() => new Set(samples.filter(s => s.splitBaseId).map(s => s.splitBaseId)), [samples]);
+  const getSampleType = useCallback((s) => {
+    if (!s) return 'unmodified';
+    if (s.splitBaseId) return 'segment';
+    if (s.hiddenAfterSplit || splitBaseIdSet.has(s.id)) return 'trimmed';
+    return 'unmodified';
+  }, [splitBaseIdSet]);
+
   const filteredSamples = useMemo(() => samples.filter(s => {
+    if (!visibleSampleTypes.has(getSampleType(s))) return false;
     if (filterLabel !== 'all' && s.label !== filterLabel) return false;
     if (filterStatus === 'enabled' && !s.enabled) return false;
     if (filterStatus === 'disabled' && s.enabled) return false;
@@ -132,7 +144,7 @@ export default function App() {
     const pct = ((s.duration_ms - minDur) / range) * 100;
     if (pct < timeRange[0] || pct > timeRange[1]) return false;
     return true;
-  }), [samples, filterLabel, filterStatus, filterCategory, timeRange, minDur, maxDur]);
+  }), [samples, visibleSampleTypes, getSampleType, filterLabel, filterStatus, filterCategory, timeRange, minDur, maxDur]);
 
   const viewSamples = useMemo(() => {
     const ids = new Set(selectedIds);
@@ -149,6 +161,15 @@ export default function App() {
     samples.forEach(s => { if (!m[s.label]) m[s.label] = []; m[s.label].push(s); });
     return m;
   }, [samples]);
+
+  const sampleTypeCounts = useMemo(() => {
+    const out = { unmodified: 0, segment: 0, trimmed: 0 };
+    samples.forEach(s => {
+      const t = getSampleType(s);
+      out[t] = (out[t] || 0) + 1;
+    });
+    return out;
+  }, [samples, getSampleType]);
 
   // ── Toast ──────────────────────────────────────────────────────────────────
   const showToast = useCallback((msg, type = 'info') => {
@@ -255,9 +276,9 @@ export default function App() {
         splitRange: seg ? { start: seg.start, end: seg.end } : null,
       };
     });
-    setSamples(p => [...p, ...ns]);
+    setSamples(p => p.map(s => s.id === sample.id ? { ...s, hiddenAfterSplit: true } : s).concat(ns));
     setSelectedIds(new Set(ns.map(s => s.id)));
-    setActiveId(sample.id);
+    setActiveId(ns[0]?.id || sample.id);
 
     if (meta?.segments?.length) {
       setSplitHighlightsByBase(prev => ({
@@ -276,14 +297,16 @@ export default function App() {
       }));
     }
 
-    showToast(`Split → ${parts.length} samples (base retained)`, 'success');
+    showToast(`Split → ${parts.length} segments (source hidden)`, 'success');
   };
 
   const batchSplitDo = (results, partLabels) => {
     const allNew = [];
     const newHighlights = {};
+    const sourceIds = new Set();
     results.forEach(r => {
       if (r.parts.length < 2) { return; }
+      sourceIds.add(r.sample.id);
       r.parts.forEach((values, i) => {
         const seg = r.meta?.segments?.[i] || null;
         allNew.push({
@@ -318,17 +341,17 @@ export default function App() {
         };
       }
     });
-    setSamples(p => [...p, ...allNew]);
+    setSamples(p => p.map(s => sourceIds.has(s.id) ? { ...s, hiddenAfterSplit: true } : s).concat(allNew));
     if (Object.keys(newHighlights).length) {
       setSplitHighlightsByBase(prev => ({ ...prev, ...newHighlights }));
     }
     setSelectedIds(new Set(allNew.map(s => s.id)));
-    if (results.length) setActiveId(results[0].sample.id);
-    showToast(`Batch split → ${allNew.length} samples (bases retained)`, 'success');
+    if (allNew.length) setActiveId(allNew[0].id);
+    showToast(`Batch split → ${allNew.length} segments (sources hidden)`, 'success');
   };
 
   const exportSelected = async () => {
-    const toExport = selectedSamples.filter(s => !s.fromLabels && s.values.length > 0);
+    const toExport = selectedSamples.filter(s => !s.fromLabels && s.values.length > 0 && getSampleType(s) !== 'trimmed');
     if (!toExport.length) { showToast('No exportable samples selected', 'error'); return; }
 
     const zip = new JSZip();
@@ -389,14 +412,249 @@ export default function App() {
     showToast(`Exported ZIP with ${toExport.length} sample${toExport.length !== 1 ? 's' : ''} + info.labels`, 'success');
   };
 
+  const exportSplitSamplesZip = async () => {
+    const splitSamples = samples.filter(s => s.splitBaseId && !s.fromLabels && s.values.length > 0);
+    if (!splitSamples.length) {
+      showToast('No split-generated samples available to export', 'error');
+      return;
+    }
+
+    const zip = new JSZip();
+    const used = new Set();
+    const normalize = (name) => {
+      const base = String(name || 'sample.json')
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .replace(/\s+/g, '_');
+      return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
+    };
+
+    splitSamples.forEach((s, i) => {
+      const baseName = normalize(s.filename || `${s.label || 'split'}_${i + 1}.json`);
+      let finalName = baseName;
+      let k = 2;
+      while (used.has(finalName)) {
+        finalName = baseName.replace(/\.json$/i, `_${k}.json`);
+        k++;
+      }
+      used.add(finalName);
+      zip.file(finalName, JSON.stringify(buildEIJson(s), null, 2));
+    });
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `split_samples_${stamp}.zip`,
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+
+    showToast(`Exported ${splitSamples.length} split sample${splitSamples.length !== 1 ? 's' : ''} to ZIP`, 'success');
+  };
+
+  const saveProject = async () => {
+    try {
+      const zip = new JSZip();
+      const sampleEntries = [];
+
+      samples.forEach((s, i) => {
+        const sid = Number.isFinite(Number(s.id)) ? Number(s.id) : (i + 1);
+        const rel = `samples/${sid}.json`;
+        sampleEntries.push({ id: sid, file: rel });
+
+        // Keep project sample payload lean to avoid allocation overflow.
+        const samplePayload = {
+          ...s,
+          id: sid,
+          raw: undefined,
+        };
+        zip.file(rel, JSON.stringify(samplePayload));
+      });
+
+      const manifest = {
+        type: 'ei-studio-project',
+        version: 2,
+        savedAt: Date.now(),
+        state: {
+          samples: sampleEntries,
+          selectedIds: [...selectedIds],
+          activeId,
+          filterLabel,
+          filterStatus,
+          filterCategory,
+          timeRange,
+          tab,
+          sidebarViewMode,
+          splitHighlightsByBase,
+          splitHighlightSensors,
+          visibleSampleTypes: [...visibleSampleTypes],
+          labelsManifest: labelsManifestRef.current,
+        },
+      };
+
+      zip.file('project.json', JSON.stringify(manifest));
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const url = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement('a'), {
+        href: url,
+        download: `ei_studio_project_${stamp}.eisproj.zip`,
+      });
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showToast(`Project saved (${samples.length} samples)`, 'success');
+    } catch (err) {
+      showToast(`Save project failed: ${err.message}`, 'error');
+    }
+  };
+
+  const openProject = useCallback(async (file) => {
+    try {
+      const normalizeSample = (s) => {
+        if (!s || !Array.isArray(s.values) || !Array.isArray(s.sensors)) return null;
+        const interval = Number(s.interval_ms) || 33.33;
+        const values = s.values;
+        return {
+          ...s,
+          id: Number.isFinite(Number(s.id)) ? Number(s.id) : uid(),
+          interval_ms: interval,
+          values,
+          duration_ms: Number.isFinite(Number(s.duration_ms)) ? Number(s.duration_ms) : values.length * interval,
+          hash: Number.isFinite(Number(s.hash)) ? Number(s.hash) : simpleHash(values),
+        };
+      };
+
+      let parsed = null;
+      let st = null;
+      let nextSamples = [];
+
+      const isZipLike = /\.zip$/i.test(file.name || '');
+      if (isZipLike) {
+        const zip = await JSZip.loadAsync(file);
+        const manifestFile = zip.file('project.json') || Object.values(zip.files).find(f => !f.dir && /project\.json$/i.test(f.name));
+        if (!manifestFile) {
+          showToast('Invalid project ZIP: missing project.json', 'error');
+          return;
+        }
+        parsed = JSON.parse(await manifestFile.async('text'));
+        if (!parsed || parsed.type !== 'ei-studio-project' || !parsed.state) {
+          showToast('Invalid project manifest', 'error');
+          return;
+        }
+        st = parsed.state;
+
+        const sampleRefs = Array.isArray(st.samples) ? st.samples : [];
+        const loaded = await Promise.all(sampleRefs.map(async (ref) => {
+          const entry = zip.file(String(ref.file || ''));
+          if (!entry) return null;
+          const content = await entry.async('text');
+          return normalizeSample(JSON.parse(content));
+        }));
+        nextSamples = loaded.filter(Boolean);
+      } else {
+        // Legacy single JSON project file support.
+        const text = await file.text();
+        parsed = JSON.parse(text);
+        if (!parsed || parsed.type !== 'ei-studio-project' || !parsed.state) {
+          showToast('Invalid project file format', 'error');
+          return;
+        }
+        st = parsed.state;
+        const nextSamplesRaw = Array.isArray(st.samples) ? st.samples : [];
+        nextSamples = nextSamplesRaw.map(normalizeSample).filter(Boolean);
+      }
+
+      setSamples(nextSamples);
+      setSelectedIds(new Set(Array.isArray(st.selectedIds) ? st.selectedIds : []));
+      setActiveId(st.activeId ?? null);
+      setFilterLabel(st.filterLabel || 'all');
+      setFilterStatus(st.filterStatus || 'all');
+      setFilterCategory(st.filterCategory || 'all');
+      setTimeRange(Array.isArray(st.timeRange) && st.timeRange.length === 2 ? st.timeRange : [0, 100]);
+      setTab(st.tab || 'waveform');
+      setSidebarViewMode(st.sidebarViewMode === 'grid' ? 'grid' : 'list');
+      setSplitHighlightsByBase(st.splitHighlightsByBase && typeof st.splitHighlightsByBase === 'object' ? st.splitHighlightsByBase : {});
+      setSplitHighlightSensors(
+        Array.isArray(st.splitHighlightSensors)
+          ? st.splitHighlightSensors
+          : st.splitHighlightSensor
+            ? [st.splitHighlightSensor]
+            : []
+      );
+      setVisibleSampleTypes(
+        Array.isArray(st.visibleSampleTypes) && st.visibleSampleTypes.length
+          ? new Set(st.visibleSampleTypes)
+          : new Set(['unmodified', 'segment'])
+      );
+      labelsManifestRef.current = Array.isArray(st.labelsManifest) ? st.labelsManifest : [];
+
+      // close transient UI states
+      setSplitTarget(null);
+      setBatchSplitTargets(null);
+      setLabelsPayload(null);
+
+      showToast(`Project opened (${nextSamples.length} samples)`, 'success');
+    } catch (err) {
+      showToast(`Open project failed: ${err.message}`, 'error');
+    }
+  }, [showToast]);
+
   const activeBaseId = activeSample ? (activeSample.splitBaseId || activeSample.id) : null;
   const activeBaseSample = activeBaseId ? samplesById.get(activeBaseId) : null;
   const activeSplitMeta = activeBaseId ? splitHighlightsByBase[activeBaseId] : null;
-  const splitPreferredSensor = useMemo(() => {
-    if (!activeBaseSample || !activeBaseSample.values?.length || !sensors.length) return null;
-    const picks = pickBestChannels(activeBaseSample.values, sensors, 1);
-    return picks[0] || sensors[0] || null;
+  const splitPreferredSensors = useMemo(() => {
+    if (!activeBaseSample || !activeBaseSample.values?.length || !sensors.length) return [];
+    const picks = pickBestChannels(activeBaseSample.values, sensors, Math.min(4, sensors.length));
+    return picks.length ? picks : sensors.slice(0, Math.min(4, sensors.length));
   }, [activeBaseSample, sensors]);
+
+  const activeSegmentSampleId = activeSample?.splitBaseId ? activeSample.id : null;
+
+  useEffect(() => {
+    if (!activeBaseSample || !sensors.length) {
+      setSplitHighlightSensors([]);
+      return;
+    }
+    setSplitHighlightSensors(prev => {
+      const valid = (prev || []).filter(s => sensors.includes(s));
+      if (valid.length) return valid;
+      return splitPreferredSensors.length ? splitPreferredSensors : [sensors[0]];
+    });
+  }, [activeBaseSample, sensors, splitPreferredSensors]);
+
+  const updateSplitSegmentRange = useCallback((sampleId, newStart, newEnd) => {
+    if (!activeBaseSample?.values?.length || !sampleId) return;
+    const start = Math.max(0, Math.min(activeBaseSample.values.length - 1, Math.round(newStart)));
+    const end = Math.max(start + 1, Math.min(activeBaseSample.values.length, Math.round(newEnd)));
+
+    setSamples(prev => prev.map(s => {
+      if (s.id !== sampleId) return s;
+      const nextValues = activeBaseSample.values.slice(start, end);
+      return {
+        ...s,
+        values: nextValues,
+        duration_ms: nextValues.length * s.interval_ms,
+        hash: simpleHash(nextValues),
+        splitRange: { start, end },
+      };
+    }));
+
+    setSplitHighlightsByBase(prev => {
+      if (!activeBaseId || !prev[activeBaseId]) return prev;
+      return {
+        ...prev,
+        [activeBaseId]: {
+          ...prev[activeBaseId],
+          segments: (prev[activeBaseId].segments || []).map(seg => (
+            seg.sampleId === sampleId ? { ...seg, start, end, length: end - start } : seg
+          )),
+        },
+      };
+    });
+  }, [activeBaseSample, activeBaseId]);
 
   const importLabelsEntries = (entries) => {
     const ns = entries.map(e => ({ filename: String(e.filename || e.path || ''), path: String(e.path || ''), sampleName: String(e.name || ''), label: String(e.label), sensors: [], interval_ms: 33.33, values: [], raw: {}, id: uid(), enabled: e.enabled !== false, category: e.category === 'testing' ? 'testing' : 'training', duration_ms: Number(e.length || 0) * 33.33, hash: uid(), fromLabels: true }));
@@ -411,6 +669,19 @@ export default function App() {
     setBatchSplitTargets(eligible);
   };
 
+  const toggleVisibleType = (type) => {
+    setVisibleSampleTypes(prev => {
+      const n = new Set(prev);
+      if (n.has(type)) {
+        if (n.size <= 1) return n;
+        n.delete(type);
+      } else {
+        n.add(type);
+      }
+      return n;
+    });
+  };
+
   const Btn = (bg, fg, disabled = false) => ({ background: disabled ? '#0d1625' : bg, color: disabled ? '#1e293b' : fg, border: 'none', borderRadius: 5, padding: '5px 11px', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 11, fontFamily: 'inherit', whiteSpace: 'nowrap', fontWeight: 600, opacity: disabled ? 0.5 : 1 });
 
   return (
@@ -422,7 +693,23 @@ export default function App() {
         <span style={{ fontSize: 9, color: '#1e3a5f', borderLeft: '1px solid #1e293b', paddingLeft: 10, letterSpacing: 1 }}>EDGE IMPULSE DATA MANAGER</span>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 9, color: '#1e3a5f' }}>{samples.length} samples · {sensors.length} ch</span>
+        <button onClick={saveProject} disabled={!samples.length} style={{ ...Btn('#111827', '#c4b5fd', !samples.length), border: '1px solid #4c1d95', fontSize: 12 }}>💾 Save Project</button>
+        <button onClick={() => projectRef.current?.click()} style={{ ...Btn('#1f2937', '#d1d5db'), border: '1px solid #374151', fontSize: 12 }}>📁 Open Project</button>
         <button onClick={() => zipRef.current?.click()} style={{ ...Btn('#0d2a1a', '#34d399'), border: '1px solid #065f46', fontSize: 12 }}>📦 Import ZIP</button>
+        <button
+          onClick={exportSplitSamplesZip}
+          disabled={!samples.some(s => s.splitBaseId && !s.fromLabels && s.values.length > 0)}
+          style={{ ...Btn('#1f2937', '#93c5fd', !samples.some(s => s.splitBaseId && !s.fromLabels && s.values.length > 0)), border: '1px solid #1e3a5f', fontSize: 12 }}
+        >
+          📤 Export ZIP
+        </button>
+        <input
+          ref={projectRef}
+          type="file"
+          accept=".eisproj,.eisproj.json,.json,.zip,.eisproj.zip"
+          style={{ display: 'none' }}
+          onChange={e => { if (e.target.files[0]) openProject(e.target.files[0]); e.target.value = ''; }}
+        />
         <input ref={zipRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleZip(e.target.files[0]); e.target.value = ''; }} />
         <button onClick={() => fileRef.current?.click()} style={{ ...Btn('#0d2040', '#60a5fa'), border: '1px solid #1e3a5f' }}>📂 Open Files</button>
         <input ref={fileRef} type="file" accept=".json,.labels" multiple style={{ display: 'none' }} onChange={e => { processFiles(Array.from(e.target.files)); e.target.value = ''; }} />
@@ -487,6 +774,37 @@ export default function App() {
               {['all', 'enabled', 'disabled'].map(v => (
                 <button key={v} onClick={() => setFilterStatus(v)} style={{ flex: 1, background: filterStatus === v ? '#0d2040' : '#080f1e', border: `1px solid ${filterStatus === v ? '#2563eb' : '#1e293b'}`, color: filterStatus === v ? '#60a5fa' : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
               ))}
+            </div>
+            <div style={{ fontSize: 9, color: '#334155', marginBottom: 3 }}>View Samples</div>
+            <div style={{ display: 'flex', gap: 3, marginBottom: 6, flexWrap: 'wrap' }}>
+              {[
+                ['unmodified', 'Unmodified'],
+                ['segment', 'Segment'],
+                ['trimmed', 'Trimmed'],
+              ].map(([k, lbl]) => {
+                const on = visibleSampleTypes.has(k);
+                return (
+                  <button
+                    key={k}
+                    onClick={() => toggleVisibleType(k)}
+                    style={{
+                      flex: 1,
+                      minWidth: 75,
+                      background: on ? '#0d2040' : '#080f1e',
+                      border: `1px solid ${on ? '#3b82f6' : '#1e293b'}`,
+                      color: on ? '#60a5fa' : '#334155',
+                      borderRadius: 4,
+                      padding: '3px 0',
+                      fontSize: 9,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                    title={`${lbl} (${sampleTypeCounts[k] || 0})`}
+                  >
+                    {lbl} ({sampleTypeCounts[k] || 0})
+                  </button>
+                );
+              })}
             </div>
             {samples.length > 0 && (
               <div>
@@ -588,7 +906,11 @@ export default function App() {
                       sample={activeBaseSample}
                       sensors={sensors}
                       segments={activeSplitMeta.segments || []}
-                      preferredSensor={splitPreferredSensor}
+                      preferredSensor={splitPreferredSensors[0] || null}
+                      selectedSensors={splitHighlightSensors}
+                      onSelectedSensorsChange={setSplitHighlightSensors}
+                      activeSegmentSampleId={activeSegmentSampleId}
+                      onUpdateSegmentRange={updateSplitSegmentRange}
                     />
                     <div style={{ marginTop: 8, background: '#080f1e', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
                       <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>
@@ -596,7 +918,20 @@ export default function App() {
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 6 }}>
                         {(activeSplitMeta.segments || []).map((seg, i) => (
-                          <div key={i} style={{ background: '#050c1a', border: `1px solid ${SENSOR_COLORS[i % SENSOR_COLORS.length]}55`, borderRadius: 6, padding: 8 }}>
+                          <div
+                            key={i}
+                            onClick={() => seg.sampleId && setActiveId(seg.sampleId)}
+                            style={{
+                              background: seg.sampleId === activeSegmentSampleId ? '#10213a' : '#050c1a',
+                              border: `1px solid ${seg.sampleId === activeSegmentSampleId ? SENSOR_COLORS[i % SENSOR_COLORS.length] : SENSOR_COLORS[i % SENSOR_COLORS.length] + '55'}`,
+                              boxShadow: seg.sampleId === activeSegmentSampleId ? `0 0 0 1px ${SENSOR_COLORS[i % SENSOR_COLORS.length]}55` : 'none',
+                              borderRadius: 6,
+                              padding: 8,
+                              cursor: seg.sampleId ? 'pointer' : 'default',
+                              opacity: activeSegmentSampleId && seg.sampleId !== activeSegmentSampleId ? 0.55 : 1,
+                            }}
+                            title={seg.sampleId ? 'Click to focus this split sample' : undefined}
+                          >
                             <div style={{ fontSize: 10, color: SENSOR_COLORS[i % SENSOR_COLORS.length], fontWeight: 700, marginBottom: 2 }}>Part {i + 1}</div>
                             <div style={{ fontSize: 9, color: '#64748b', lineHeight: 1.5 }}>
                               <div>Label: <span style={{ color: '#94a3b8' }}>{seg.label || activeBaseSample.label}</span></div>
