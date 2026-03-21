@@ -317,6 +317,29 @@ export default function SplitHighlightsViewer({
                   </button>
                 ))}
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 8, color: '#64748b' }}>Discriminant:</span>
+                {groups.map(group => (
+                  <button
+                    key={`disc-all-${group.key}`}
+                    onClick={() => selectDiscriminantGroup(group.sensors)}
+                    style={{
+                      background: '#060d1a',
+                      border: `1px solid ${group.color}`,
+                      color: group.color,
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: 8,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontWeight: 700,
+                    }}
+                    title={`Select all channels in ${group.label}`}
+                  >
+                    All {group.label.replace(/^.*\s/, '')}
+                  </button>
+                ))}
+              </div>
               <div style={{ height: 1, background: '#1e293b', margin: '1px 0 2px' }} />
               {groups.map(group => (
                 <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>

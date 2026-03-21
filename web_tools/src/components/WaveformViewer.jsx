@@ -5,8 +5,8 @@ import { SENSOR_COLORS } from '../utils/colors';
 const SENSOR_GROUPS = {
   flex:   { label: 'Flex',   prefix: 'flex', color: '#38bdf8' },
   hall:   { label: 'Hall',   prefix: 'hall', color: '#34d399' },
-  accel:  { label: 'Accel',  prefix: 'accel', color: '#f87171' },
-  gyro:   { label: 'Gyro',   prefix: 'gyro', color: '#fbbf24' },
+  accel:  { label: 'Accel',  prefix: 'accel', match: ['ax', 'ay', 'az', 'acc_x', 'acc_y', 'acc_z'], color: '#f87171' },
+  gyro:   { label: 'Gyro',   prefix: 'gyro', match: ['gx', 'gy', 'gz', 'gyro_x', 'gyro_y', 'gyro_z'], color: '#fbbf24' },
   orient: { label: 'Orient', match: ['pitch','roll','yaw'], color: '#a78bfa' },
 };
 
