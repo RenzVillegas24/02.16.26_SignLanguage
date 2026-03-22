@@ -4,10 +4,12 @@ import {
   Save, FolderOpen, Package, Upload, FileJson,
   Scissors, GitMerge, Fingerprint, Download,
   List, LayoutGrid, Zap, ChevronRight,
-  CheckSquare, Square, Trash2, Filter, Search, X,
+  CheckSquare, Square, Trash2, Filter, Search, X, Sun, Moon,
 } from 'lucide-react';
 import { uid, syncUid, parseEIJson, parseLabelsFile, buildEIJson, downloadJSON, simpleHash, formatMs } from './utils/parse';
 import { SENSOR_COLORS, CATEGORY_COLORS } from './utils/colors';
+import { DARK, LIGHT } from './utils/theme';
+import { ThemeContext } from './utils/ThemeContext';
 import { pickBestChannels } from './utils/algorithms';
 import DualRange from './components/DualRange';
 import SplitModal from './components/SplitModal';
@@ -16,6 +18,9 @@ import WaveformViewer from './components/WaveformViewer';
 import SampleCard from './components/SampleCard';
 import SplitHighlightsViewer from './components/SplitHighlightsViewer';
 import LoadingOverlay from './components/LoadingOverlay';
+import PredictTab from './components/PredictTab';
+import WindowedCountTab from './components/WindowedCountTab';
+import JsonImportModal from './components/JsonImportModal';
 
 // ─── ZIP loader ────────────────────────────────────────────────────────────
 async function loadZip(file) {
@@ -113,11 +118,22 @@ export default function App() {
   const [splitHighlightsByBase, setSplitHighlightsByBase] = useState({});
   const [splitHighlightSensors, setSplitHighlightSensors] = useState([]);
   const [visibleSampleTypes, setVisibleSampleTypes] = useState(new Set(['unmodified', 'segment']));
+  const [themeName, setThemeName] = useState('dark');
+  const [importMergeMode, setImportMergeMode] = useState('merge'); // 'merge' | 'replace' | 'add'
+  const theme = themeName === 'light' ? LIGHT : DARK;
+
+  useEffect(() => {
+    document.body.className = themeName === 'light' ? 'light' : '';
+    document.body.style.background = theme.bgBase;
+    document.body.style.color = theme.textPrimary;
+  }, [themeName, theme]);
 
   const fileRef = useRef();
   const zipRef = useRef();
   const projectRef = useRef();
+  const jsonImportRef = useRef();
   const labelsManifestRef = useRef([]);
+  const [jsonImportFiles, setJsonImportFiles] = useState(null); // null | File[]
   const sidebar = useResizable(295, 180, 620);
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -207,15 +223,59 @@ export default function App() {
       const { manifest, samples: newSamples } = await loadZip(file);
       if (manifest.length) labelsManifestRef.current = manifest;
       if (!newSamples.length) { showToast('No valid sample .json files found in ZIP', 'error'); setLoading(null); return; }
-      setLoading({ label: 'Importing samples', sub: `${newSamples.length} samples found`, count: newSamples.length, total: newSamples.length });
-      setSamples(p => [...p, ...newSamples]);
-      if (newSamples.length > 0) setActiveId(newSamples[0].id);
-      showToast(`Loaded ${newSamples.length} samples${manifest.length ? ` · ${manifest.length} manifest entries` : ''}`, 'success');
+
+      setSamples(prev => {
+        if (importMergeMode === 'replace') {
+          // Wipe all existing non-segment samples and load fresh
+          const segments = prev.filter(s => s.splitBaseId);
+          return [...segments, ...newSamples];
+        }
+        if (importMergeMode === 'merge') {
+          // Smart merge: skip samples that match an existing one by filename OR by data hash
+          // Also update label/category/sampleName if filename matches (label update)
+          const existingByFilename = new Map(prev.map(s => [s.filename, s]));
+          const existingByHash     = new Map(prev.filter(s => s.hash).map(s => [s.hash, s]));
+          let added = 0, updated = 0, skipped = 0;
+          const result = [...prev];
+
+          newSamples.forEach(ns => {
+            const byFile = existingByFilename.get(ns.filename);
+            const byHash = existingByHash.get(ns.hash);
+            if (byFile) {
+              // Same filename — update label/category/sampleName if they changed
+              const idx = result.findIndex(s => s.id === byFile.id);
+              if (idx >= 0 && (byFile.label !== ns.label || byFile.category !== ns.category || byFile.sampleName !== ns.sampleName)) {
+                result[idx] = { ...result[idx], label: ns.label, category: ns.category, sampleName: ns.sampleName };
+                updated++;
+              } else {
+                skipped++;
+              }
+            } else if (byHash) {
+              // Same data but different filename (re-exported) — skip as duplicate
+              skipped++;
+            } else {
+              result.push(ns);
+              added++;
+            }
+          });
+          showToast(`Import: ${added} added · ${updated} updated · ${skipped} skipped (duplicates)`, 'success');
+          return result;
+        }
+        // 'add' — just append everything without dedup
+        return [...prev, ...newSamples];
+      });
+
+      if (importMergeMode === 'add') {
+        showToast(`Loaded ${newSamples.length} samples${manifest.length ? ` · ${manifest.length} manifest entries` : ''}`, 'success');
+      } else if (importMergeMode === 'replace') {
+        showToast(`Replaced with ${newSamples.length} new samples`, 'success');
+      }
+      setActiveId(prev => prev || newSamples[0]?.id || null);
     } catch (err) {
       showToast(`ZIP error: ${err.message}`, 'error');
     }
     setLoading(null);
-  }, [showToast]);
+  }, [showToast, importMergeMode]);
 
   // ── Plain files ────────────────────────────────────────────────────────────
   const handleJsonFiles = useCallback(async (files) => {
@@ -252,8 +312,14 @@ export default function App() {
 
   const handleDrop = useCallback((e) => {
     e.preventDefault(); setDragOver(false);
-    processFiles(Array.from(e.dataTransfer.files));
-  }, [processFiles]);
+    const files = Array.from(e.dataTransfer.files);
+    const zips  = files.filter(f => f.name.endsWith('.zip'));
+    const jsons = files.filter(f => f.name.endsWith('.json'));
+    const others = files.filter(f => !f.name.endsWith('.zip') && !f.name.endsWith('.json'));
+    for (const z of zips) handleZip(z);
+    if (jsons.length) setJsonImportFiles(jsons); // open modal for json files
+    if (others.length) handleJsonFiles(others);
+  }, [handleZip, handleJsonFiles]);
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const toggleSel = (id) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -578,44 +644,93 @@ export default function App() {
   };
 
   const exportSplitSamplesZip = async () => {
-    const splitSamples = samples.filter(s => s.splitBaseId && !s.fromLabels && s.values.length > 0);
-    if (!splitSamples.length) {
-      showToast('No split-generated samples available to export', 'error');
+    // Export ALL non-hidden, non-ref samples (segments + originals that aren't hidden)
+    // in proper EI format: testing/ training/ directories + info.labels
+    const toExport = samples.filter(s =>
+      !s.fromLabels && s.values.length > 0 && !s.hiddenAfterSplit
+    );
+    if (!toExport.length) {
+      showToast('No samples available to export', 'error');
       return;
     }
 
-    const zip = new JSZip();
-    const used = new Set();
-    const normalize = (name) => {
-      const base = String(name || 'sample.json')
-        .replace(/[\\/:*?"<>|]+/g, '_')
-        .replace(/\s+/g, '_');
-      return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
-    };
+    setLoading({ label: 'Building EI export ZIP', sub: `${toExport.length} samples` });
+    try {
+      const zip = new JSZip();
+      const usedPaths = new Set();
 
-    splitSamples.forEach((s, i) => {
-      const baseName = normalize(s.filename || `${s.label || 'split'}_${i + 1}.json`);
-      let finalName = baseName;
-      let k = 2;
-      while (used.has(finalName)) {
-        finalName = baseName.replace(/\.json$/i, `_${k}.json`);
-        k++;
-      }
-      used.add(finalName);
-      zip.file(finalName, JSON.stringify(buildEIJson(s), null, 2));
-    });
+      const normalize = (name) => {
+        const base = String(name || 'sample.json')
+          .replace(/[\\/:*?"<>|]+/g, '_')
+          .replace(/\s+/g, '_');
+        return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
+      };
 
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const url = URL.createObjectURL(blob);
-    const a = Object.assign(document.createElement('a'), {
-      href: url,
-      download: `split_samples_${stamp}.zip`,
-    });
-    a.click();
-    URL.revokeObjectURL(url);
+      // Build EI-compatible filename: label.json.HASH.ingestion-0.s0.json
+      // or simpler: label.samplename.json in category directory
+      const makeEIFilename = (s, idx) => {
+        const labelPart = (s.label || 'unknown').replace(/\s+/g, '_').toLowerCase();
+        const namePart  = s.sampleName ? `.${s.sampleName.replace(/\s+/g, '_')}` : `_${idx + 1}`;
+        return `${labelPart}${namePart}.json`;
+      };
 
-    showToast(`Exported ${splitSamples.length} split sample${splitSamples.length !== 1 ? 's' : ''} to ZIP`, 'success');
+      const manifestFiles = toExport.map((s, i) => {
+        const category = s.category === 'testing' ? 'testing' : 'training';
+        const baseName = normalize(makeEIFilename(s, i));
+        let finalName = baseName;
+        let k = 2;
+        while (usedPaths.has(`${category}/${finalName}`)) {
+          finalName = baseName.replace(/\.json$/i, `_${k}.json`);
+          k++;
+        }
+        const relPath = `${category}/${finalName}`;
+        usedPaths.add(relPath);
+
+        // Write sample JSON — EI expects payload-wrapped format
+        zip.file(relPath, JSON.stringify(buildEIJson(s), null, 2));
+
+        return {
+          path: relPath,
+          category,
+          name: s.sampleName || finalName.replace(/\.json$/i, ''),
+          label: s.label,
+          enabled: s.enabled !== false,
+          length: s.values.length,
+          interval_ms: s.interval_ms,
+        };
+      });
+
+      // Build info.labels in exact EI format
+      const labelsObj = {
+        version: 1,
+        files: manifestFiles.map(f => ({
+          path: f.path,
+          name: f.name,
+          category: f.category,
+          label: { type: 'label', label: f.label },
+          enabled: f.enabled,
+          length: f.length,
+          metadata: {},
+        })),
+      };
+      zip.file('info.labels', JSON.stringify(labelsObj, null, 2));
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const url = URL.createObjectURL(blob);
+      Object.assign(document.createElement('a'), {
+        href: url,
+        download: `ei_export_${stamp}.zip`,
+      }).click();
+      URL.revokeObjectURL(url);
+
+      const train = manifestFiles.filter(f => f.category === 'training').length;
+      const test  = manifestFiles.filter(f => f.category === 'testing').length;
+      showToast(`Exported ${toExport.length} samples (${train} train / ${test} test) + info.labels`, 'success');
+    } catch (err) {
+      showToast(`Export failed: ${err.message}`, 'error');
+    }
+    setLoading(null);
   };
 
   const saveProject = async () => {
@@ -906,20 +1021,19 @@ export default function App() {
 
   // ── Icon button helpers ──────────────────────────────────────────────────
   const Btn = (bg, fg, disabled = false) => ({
-    background: disabled ? '#0d1625' : bg, color: disabled ? '#1e293b' : fg,
+    background: disabled ? theme.bgCard : bg, color: disabled ? theme.textDim : fg,
     border: 'none', borderRadius: 5, padding: '5px 11px',
     cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 11,
     fontFamily: 'inherit', whiteSpace: 'nowrap', fontWeight: 600, opacity: disabled ? 0.5 : 1,
   });
 
-  // Top bar icon button
-  const TopBtn = ({ icon, label, onClick, disabled, color = '#94a3b8', bg = '#111827', border = '#1e293b', title }) => (
+  const TopBtn = ({ icon, label, onClick, disabled, color, bg, border, title }) => (
     <button onClick={onClick} disabled={disabled} title={title}
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
-        background: disabled ? '#0a0f1a' : bg,
-        border: `1px solid ${disabled ? '#1a2030' : border}`,
-        color: disabled ? '#1e293b' : color,
+        background: disabled ? theme.bgCard : bg,
+        border: `1px solid ${disabled ? theme.border : border}`,
+        color: disabled ? theme.textDim : color,
         borderRadius: 6, padding: '5px 10px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
@@ -932,15 +1046,14 @@ export default function App() {
     </button>
   );
 
-  // Sidebar action button
-  const SideBtn = ({ icon, label, onClick, disabled, color = '#94a3b8', bg = '#111827', fullWidth }) => (
+  const SideBtn = ({ icon, label, onClick, disabled, color, bg, fullWidth }) => (
     <button onClick={onClick} disabled={disabled}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
         ...(fullWidth ? { width: '100%' } : { flex: 1 }),
-        background: disabled ? '#0a0f1a' : bg,
-        border: `1px solid ${disabled ? '#1a2030' : '#1e293b'}`,
-        color: disabled ? '#1e293b' : color,
+        background: disabled ? theme.bgCard : (bg || theme.bgCard),
+        border: `1px solid ${disabled ? theme.border : theme.border}`,
+        color: disabled ? theme.textDim : (color || theme.textSecondary),
         borderRadius: 5, padding: '4px 6px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
@@ -952,13 +1065,12 @@ export default function App() {
     </button>
   );
 
-  // Inline action icon+label button (used in waveform bar)
-  const IcoBtn = ({ icon, label, onClick, color = '#94a3b8', bg = '#111827', border = '#1e293b' }) => (
+  const IcoBtn = ({ icon, label, onClick, color, bg, border }) => (
     <button onClick={onClick}
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
-        background: bg, border: `1px solid ${border}`,
-        color, borderRadius: 6, padding: '5px 10px',
+        background: bg || theme.bgCard, border: `1px solid ${border || theme.border}`,
+        color: color || theme.textSecondary, borderRadius: 6, padding: '5px 10px',
         cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
       }}
     >
@@ -968,57 +1080,93 @@ export default function App() {
   );
 
   return (
-    <div style={{ fontFamily: "'JetBrains Mono', monospace", background: '#060d1a', minHeight: '100vh', color: '#f1f5f9' }}>
+    <ThemeContext.Provider value={theme}>
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", background: theme.bgBase, minHeight: '100vh', color: theme.textPrimary }}>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: ${theme.scrollTrack}; }
+        ::-webkit-scrollbar-thumb { background: ${theme.scrollThumb}; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: ${theme.accent}; }
+      `}</style>
 
       {/* TOP BAR */}
       <div style={{
-        background: '#020810',
-        borderBottom: '1px solid #141f35',
+        background: theme.bgTopbar,
+        borderBottom: `1px solid ${theme.border}`,
         padding: '0 14px',
         display: 'flex', alignItems: 'center', gap: 8,
         height: 50, flexShrink: 0,
-        boxShadow: '0 1px 0 #141f35',
+        boxShadow: `0 1px 0 ${theme.border}`,
       }}>
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 6 }}>
-          <Zap size={18} color="#38bdf8" strokeWidth={2.5} />
-          <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.5, color: '#f1f5f9' }}>
-            EI<span style={{ color: '#38bdf8' }}>Studio</span>
+          <Zap size={18} color={theme.accent} strokeWidth={2.5} />
+          <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.5, color: theme.textPrimary }}>
+            EI<span style={{ color: theme.accent }}>Studio</span>
           </span>
         </div>
-        <div style={{ width: 1, height: 24, background: '#1e293b', marginRight: 2 }} />
+        <div style={{ width: 1, height: 24, background: theme.border, marginRight: 2 }} />
 
         {/* File actions */}
         <TopBtn icon={<Save size={13} />} label="Save" onClick={saveProject} disabled={!samples.length}
-          color="#a78bfa" bg="#1a103a" border="#4c1d95" title="Save project to .eisproj.zip" />
+          color="#a78bfa" bg={theme.bgCard} border="#4c1d95" title="Save project" theme={theme} />
         <TopBtn icon={<FolderOpen size={13} />} label="Open" onClick={() => projectRef.current?.click()}
-          color="#d1d5db" bg="#1a2030" border="#374151" title="Open saved project" />
-        <div style={{ width: 1, height: 24, background: '#1e293b' }} />
+          color={theme.textSecondary} bg={theme.bgCard} border={theme.border} title="Open saved project" theme={theme} />
+        <div style={{ width: 1, height: 24, background: theme.border }} />
+
+        {/* Import mode selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: theme.bgCard, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '2px 3px' }}>
+          {[['merge', 'Merge'], ['add', 'Add'], ['replace', 'Replace']].map(([m, l]) => (
+            <button key={m} onClick={() => setImportMergeMode(m)} title={
+              m === 'merge' ? 'Skip duplicates (by filename/hash), update label changes' :
+              m === 'add'   ? 'Always add all samples, no dedup' :
+              'Replace all existing samples with new ones'
+            } style={{
+              background: importMergeMode === m ? theme.accent + '33' : 'transparent',
+              border: `1px solid ${importMergeMode === m ? theme.accent : 'transparent'}`,
+              color: importMergeMode === m ? theme.accent : theme.textDim,
+              borderRadius: 4, padding: '2px 7px', cursor: 'pointer', fontSize: 9, fontFamily: 'inherit', fontWeight: importMergeMode === m ? 700 : 400,
+            }}>{l}</button>
+          ))}
+        </div>
+
         <TopBtn icon={<Package size={13} />} label="Import ZIP" onClick={() => zipRef.current?.click()}
-          color="#34d399" bg="#0a2018" border="#065f46" title="Import EdgeImpulse dataset ZIP" />
+          color="#34d399" bg={theme.bgCard} border="#065f46" title="Import EdgeImpulse dataset ZIP" theme={theme} />
+        <TopBtn icon={<FileJson size={13} />} label="Import JSON" onClick={() => jsonImportRef.current?.click()}
+          color="#38bdf8" bg={theme.bgCard} border="#0e4a6a" title="Import individual .json sample files with label assignment" theme={theme} />
         <TopBtn
           icon={<Download size={13} />} label="Export ZIP"
           onClick={exportSplitSamplesZip}
-          disabled={!samples.some(s => s.splitBaseId && !s.fromLabels && s.values.length > 0)}
-          color="#93c5fd" bg="#0d1e30" border="#1e3a5f"
-          title="Export split samples to ZIP"
+          disabled={!samples.some(s => !s.hiddenAfterSplit && !s.fromLabels && s.values.length > 0)}
+          color="#93c5fd" bg={theme.bgCard} border={theme.borderHi}
+          title="Export all samples as EI-compatible ZIP" theme={theme}
         />
         <TopBtn icon={<FileJson size={13} />} label="Files" onClick={() => fileRef.current?.click()}
-          color="#60a5fa" bg="#0d1e30" border="#1e3a5f" title="Open individual .json/.labels files" />
+          color={theme.accentAlt} bg={theme.bgCard} border={theme.borderHi} title="Open individual .json/.labels files" theme={theme} />
 
         <div style={{ flex: 1 }} />
 
         {/* Stats */}
-        <div style={{ display: 'flex', gap: 12, fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>
-          <span>{samples.length} <span style={{ color: '#1e3a5f' }}>samples</span></span>
-          <span>{sensors.length} <span style={{ color: '#1e3a5f' }}>channels</span></span>
+        <div style={{ display: 'flex', gap: 12, fontSize: 10, color: theme.textFaint, fontFamily: 'monospace' }}>
+          <span>{samples.length} <span style={{ color: theme.textDim }}>samples</span></span>
+          <span>{sensors.length} <span style={{ color: theme.textDim }}>channels</span></span>
         </div>
+
+        {/* Theme toggle */}
+        <button onClick={() => setThemeName(t => t === 'dark' ? 'light' : 'dark')}
+          title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: theme.bgCard, border: `1px solid ${theme.border}`, color: theme.textMuted, borderRadius: 6, cursor: 'pointer' }}>
+          {themeName === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
 
         {/* Hidden file inputs */}
         <input ref={projectRef} type="file" accept=".eisproj,.eisproj.json,.json,.zip,.eisproj.zip"
           style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) openProject(e.target.files[0]); e.target.value = ''; }} />
         <input ref={zipRef} type="file" accept=".zip" style={{ display: 'none' }}
           onChange={e => { if (e.target.files[0]) handleZip(e.target.files[0]); e.target.value = ''; }} />
+        <input ref={jsonImportRef} type="file" accept=".json" multiple style={{ display: 'none' }}
+          onChange={e => { if (e.target.files.length) { setJsonImportFiles(Array.from(e.target.files)); } e.target.value = ''; }} />
         <input ref={fileRef} type="file" accept=".json,.labels" multiple style={{ display: 'none' }}
           onChange={e => { processFiles(Array.from(e.target.files)); e.target.value = ''; }} />
       </div>
@@ -1026,11 +1174,46 @@ export default function App() {
       {/* LOADING OVERLAY */}
       <LoadingOverlay loading={loading} />
 
+      {/* JSON IMPORT MODAL */}
+      {jsonImportFiles && (
+        <JsonImportModal
+          files={jsonImportFiles}
+          existingSamples={samples}
+          onImport={newSamples => {
+            setSamples(prev => {
+              if (importMergeMode === 'replace') return newSamples;
+              if (importMergeMode === 'merge') {
+                const existingByFilename = new Map(prev.map(s => [s.filename, s]));
+                const existingByHash     = new Map(prev.filter(s => s.hash).map(s => [s.hash, s]));
+                let added = 0, skipped = 0;
+                const result = [...prev];
+                newSamples.forEach(ns => {
+                  if (existingByFilename.has(ns.filename) || existingByHash.has(ns.hash)) {
+                    skipped++;
+                  } else {
+                    result.push(ns);
+                    added++;
+                  }
+                });
+                showToast(`Import: ${added} added · ${skipped} skipped (duplicates)`, 'success');
+                return result;
+              }
+              return [...prev, ...newSamples];
+            });
+            if (importMergeMode !== 'merge') {
+              showToast(`Imported ${newSamples.length} sample${newSamples.length !== 1 ? 's' : ''}`, 'success');
+            }
+            setActiveId(newSamples[0]?.id ?? null);
+          }}
+          onClose={() => setJsonImportFiles(null)}
+        />
+      )}
+
       {/* TOAST */}
       {toast && (
         <div style={{
           position: 'fixed', top: 60, right: 16, zIndex: 400,
-          background: toast.type === 'success' ? '#041e10' : toast.type === 'error' ? '#1f0a0a' : '#0a1628',
+          background: toast.type === 'success' ? '#041e10' : toast.type === 'error' ? '#1f0a0a' : theme.bgHover,
           border: `1px solid ${toast.type === 'success' ? '#16a34a' : toast.type === 'error' ? '#dc2626' : '#2563eb'}`,
           color: toast.type === 'success' ? '#4ade80' : toast.type === 'error' ? '#f87171' : '#93c5fd',
           borderRadius: 8, padding: '10px 16px', fontSize: 12,
@@ -1059,7 +1242,7 @@ export default function App() {
       <div style={{ display: 'flex', height: 'calc(100vh - 50px)' }}>
 
         {/* ── SIDEBAR ── */}
-        <div style={{ width: sidebar.width, borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', background: '#020810', flexShrink: 0, position: 'relative' }}>
+        <div style={{ width: sidebar.width, borderRight: `1px solid ${theme.border}`, display: 'flex', flexDirection: 'column', background: theme.bgSidebar, flexShrink: 0, position: 'relative' }}>
 
           {/* Drop zone */}
           <div
@@ -1083,34 +1266,34 @@ export default function App() {
               <div style={{ fontSize: 10, fontWeight: 600, color: dragOver ? '#34d399' : '#334155' }}>
                 Drop or click to import
               </div>
-              <div style={{ fontSize: 8, color: '#1e3a5f', marginTop: 1 }}>
+              <div style={{ fontSize: 8, color: theme.textFaint, marginTop: 1 }}>
                 .zip · info.labels + testing/ + training/
               </div>
             </div>
           </div>
 
           {/* Filters */}
-          <div style={{ padding: '0 8px 6px', borderBottom: '1px solid #1e293b', marginBottom: 5 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, color: '#1e3a5f', marginBottom: 5, letterSpacing: 1 }}>
+          <div style={{ padding: '0 8px 6px', borderBottom: `1px solid ${theme.border}`, marginBottom: 5 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, color: theme.textFaint, marginBottom: 5, letterSpacing: 1 }}>
               <Filter size={10} color="#1e3a5f" /> FILTERS
             </div>
             <select value={filterLabel} onChange={e => setFilterLabel(e.target.value)}
-              style={{ width: '100%', background: '#080f1e', color: '#94a3b8', border: '1px solid #1e293b', borderRadius: 5, padding: '4px 6px', fontSize: 10, marginBottom: 4, fontFamily: 'inherit' }}>
+              style={{ width: '100%', background: theme.bgPanel, color: theme.textSecondary, border: `1px solid ${theme.border}`, borderRadius: 5, padding: '4px 6px', fontSize: 10, marginBottom: 4, fontFamily: 'inherit' }}>
               {allLabels.map(l => <option key={l} value={l}>{l}{l !== 'all' ? ` (${(groupedByLabel[l] || []).length})` : ` (${samples.length})`}</option>)}
             </select>
             <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
               {['all', 'training', 'testing'].map(v => (
-                <button key={v} onClick={() => setFilterCategory(v)} style={{ flex: 1, background: filterCategory === v ? (v === 'testing' ? '#451a0333' : v === 'training' ? '#0d204066' : '#1e293b') : '#080f1e', border: `1px solid ${filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#64748b') : '#1e293b'}`, color: filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#94a3b8') : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <button key={v} onClick={() => setFilterCategory(v)} style={{ flex: 1, background: filterCategory === v ? (v === 'testing' ? '#451a0333' : v === 'training' ? '#0d204066' : '#1e293b') : '#080f1e', border: `1px solid ${filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#64748b') : theme.border}`, color: filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#94a3b8') : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
                   {v === 'all' ? 'All' : v === 'training' ? 'Train' : 'Test'}
                 </button>
               ))}
             </div>
             <div style={{ display: 'flex', gap: 3, marginBottom: 5 }}>
               {['all', 'enabled', 'disabled'].map(v => (
-                <button key={v} onClick={() => setFilterStatus(v)} style={{ flex: 1, background: filterStatus === v ? '#0d2040' : '#080f1e', border: `1px solid ${filterStatus === v ? '#2563eb' : '#1e293b'}`, color: filterStatus === v ? '#60a5fa' : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
+                <button key={v} onClick={() => setFilterStatus(v)} style={{ flex: 1, background: filterStatus === v ? '#0d2040' : '#080f1e', border: `1px solid ${filterStatus === v ? '#2563eb' : theme.border}`, color: filterStatus === v ? '#60a5fa' : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
               ))}
             </div>
-            <div style={{ fontSize: 9, color: '#334155', marginBottom: 3 }}>View Samples</div>
+            <div style={{ fontSize: 9, color: theme.textDim, marginBottom: 3 }}>View Samples</div>
             <div style={{ display: 'flex', gap: 3, marginBottom: 6, flexWrap: 'wrap' }}>
               {[
                 ['unmodified', 'Unmodified'],
@@ -1126,7 +1309,7 @@ export default function App() {
                       flex: 1,
                       minWidth: 75,
                       background: on ? '#0d2040' : '#080f1e',
-                      border: `1px solid ${on ? '#3b82f6' : '#1e293b'}`,
+                      border: `1px solid ${on ? '#3b82f6' : theme.border}`,
                       color: on ? '#60a5fa' : '#334155',
                       borderRadius: 4,
                       padding: '3px 0',
@@ -1143,9 +1326,9 @@ export default function App() {
             </div>
             {samples.length > 0 && (
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#334155', marginBottom: 2 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: theme.textDim, marginBottom: 2 }}>
                   <span>Duration</span>
-                  <span style={{ color: '#475569' }}>{formatMs(minDur + (maxDur - minDur) * timeRange[0] / 100)} – {formatMs(minDur + (maxDur - minDur) * timeRange[1] / 100)}</span>
+                  <span style={{ color: theme.textMuted }}>{formatMs(minDur + (maxDur - minDur) * timeRange[0] / 100)} – {formatMs(minDur + (maxDur - minDur) * timeRange[1] / 100)}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
@@ -1162,9 +1345,9 @@ export default function App() {
                     step={1}
                     style={{
                       width: 74,
-                      background: '#080f1e',
-                      color: '#94a3b8',
-                      border: '1px solid #1e293b',
+                      background: theme.bgPanel,
+                      color: theme.textSecondary,
+                      border: `1px solid ${theme.border}`,
                       borderRadius: 4,
                       padding: '2px 4px',
                       fontSize: 9,
@@ -1190,9 +1373,9 @@ export default function App() {
                     step={1}
                     style={{
                       width: 74,
-                      background: '#080f1e',
-                      color: '#94a3b8',
-                      border: '1px solid #1e293b',
+                      background: theme.bgPanel,
+                      color: theme.textSecondary,
+                      border: `1px solid ${theme.border}`,
                       borderRadius: 4,
                       padding: '2px 4px',
                       fontSize: 9,
@@ -1218,7 +1401,7 @@ export default function App() {
                 placeholder="Search label, name, filename…"
                 style={{
                   width: '100%', boxSizing: 'border-box',
-                  background: '#080f1e', color: '#f1f5f9',
+                  background: theme.bgPanel, color: theme.textPrimary,
                   border: `1px solid ${sampleSearch ? '#3b82f6' : '#1a2540'}`,
                   borderRadius: 6, padding: '5px 24px 5px 26px',
                   fontSize: 10, fontFamily: 'inherit', outline: 'none',
@@ -1231,7 +1414,7 @@ export default function App() {
                   style={{
                     position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: 'none', border: 'none', color: '#475569',
+                    background: 'none', border: 'none', color: theme.textMuted,
                     cursor: 'pointer', padding: 2, borderRadius: 3,
                   }}
                 >
@@ -1276,18 +1459,18 @@ export default function App() {
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 9, color: '#1e3a5f', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: 9, color: theme.textFaint, fontFamily: 'monospace' }}>
                 {filteredSamples.length}/{samples.length}
                 {sampleSearch && <span style={{ color: '#3b82f6' }}> filtered</span>}
                 {selectedIds.size > 0 && <span style={{ color: '#60a5fa' }}> · {selectedIds.size} sel</span>}
               </span>
               <div style={{ display: 'flex', gap: 2 }}>
                 <button onClick={() => setSidebarViewMode('list')} title="List view"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'list' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'list' ? '#3b82f6' : '#1e293b'}`, color: sidebarViewMode === 'list' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'list' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'list' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'list' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
                   <List size={12} />
                 </button>
                 <button onClick={() => setSidebarViewMode('grid')} title="Grid view"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'grid' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'grid' ? '#3b82f6' : '#1e293b'}`, color: sidebarViewMode === 'grid' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'grid' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'grid' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'grid' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
                   <LayoutGrid size={12} />
                 </button>
               </div>
@@ -1321,29 +1504,29 @@ export default function App() {
           >
             <div style={{ position: 'absolute', top: '50%', right: 1, transform: 'translateY(-50%)', width: 3, height: 40, background: '#1e293b', borderRadius: 2, transition: 'background 0.15s' }}
               onMouseEnter={e => e.currentTarget.style.background = '#3b82f6'}
-              onMouseLeave={e => e.currentTarget.style.background = '#1e293b'} />
+              onMouseLeave={e => e.currentTarget.style.background = theme.border} />
           </div>
         </div>
 
         {/* ── MAIN PANEL ── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-          <div style={{ background: '#020810', borderBottom: '1px solid #1e293b', display: 'flex', padding: '0 16px', flexShrink: 0 }}>
-            {[['waveform', '📈 Waveform'], ['groups', '🗂 Groups'], ['stats', '📊 Stats']].map(([t, l]) => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', borderBottom: `2px solid ${tab === t ? '#38bdf8' : 'transparent'}`, color: tab === t ? '#38bdf8' : '#334155', padding: '11px 16px', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: tab === t ? 700 : 400 }}>{l}</button>
+          <div style={{ background: theme.bgTopbar, borderBottom: `1px solid ${theme.border}`, display: 'flex', padding: '0 16px', flexShrink: 0 }}>
+            {[['waveform', 'Waveform'], ['groups', 'Groups'], ['stats', 'Stats'], ['windows', 'Windows'], ['predict', 'Predict']].map(([t, l]) => (
+              <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', borderBottom: `2px solid ${tab === t ? theme.accent : 'transparent'}`, color: tab === t ? theme.accent : theme.textDim, padding: '11px 14px', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: tab === t ? 700 : 400, whiteSpace: 'nowrap' }}>{l}</button>
             ))}
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: 16, background: theme.bgBase }}>
 
             {/* ── WAVEFORM ── */}
             {tab === 'waveform' && (
               <div>
                 {activeSample && !activeSample.fromLabels && activeSample.values.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 12px', background: '#080f1e', border: `1px solid ${activeSample.splitBaseId ? '#1e3a5f' : '#1e3a5f'}`, borderRadius: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 12px', background: theme.bgPanel, border: `1px solid ${activeSample.splitBaseId ? '#1e3a5f' : '#1e3a5f'}`, borderRadius: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, flex: 1, minWidth: 0 }}>
-                      <span style={{ color: '#94a3b8', fontWeight: 400 }}>Active: </span>
-                      <span style={{ color: '#f1f5f9' }}>{activeSample.label}</span>
-                      {activeSample.sampleName && <span style={{ color: '#475569', fontWeight: 400 }}> · {activeSample.sampleName}</span>}
+                      <span style={{ color: theme.textSecondary, fontWeight: 400 }}>Active: </span>
+                      <span style={{ color: theme.textPrimary }}>{activeSample.label}</span>
+                      {activeSample.sampleName && <span style={{ color: theme.textMuted, fontWeight: 400 }}> · {activeSample.sampleName}</span>}
                       {activeSample.splitBaseId && (
                         <span style={{ marginLeft: 8, fontSize: 9, background: '#0d1f1a', color: '#2dd4bf', border: '1px solid #0f4a40', borderRadius: 3, padding: '1px 6px', fontWeight: 400 }}>
                           segment — cannot be split further
@@ -1374,9 +1557,9 @@ export default function App() {
                       activeSegmentSampleId={activeSegmentSampleId}
                       onUpdateSegmentRange={updateSplitSegmentRange}
                     />
-                    <div style={{ marginTop: 8, background: '#080f1e', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
-                      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>
-                        Split data from base sample <span style={{ color: '#f1f5f9' }}>{activeBaseSample.label}</span>
+                    <div style={{ marginTop: 8, background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 10 }}>
+                      <div style={{ fontSize: 10, color: theme.textMuted, marginBottom: 6 }}>
+                        Split data from base sample <span style={{ color: theme.textPrimary }}>{activeBaseSample.label}</span>
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 6 }}>
                         {(activeSplitMeta.segments || []).map((seg, i) => (
@@ -1384,7 +1567,7 @@ export default function App() {
                             key={i}
                             onClick={() => seg.sampleId && setActiveId(seg.sampleId)}
                             style={{
-                              background: seg.sampleId === activeSegmentSampleId ? '#10213a' : '#050c1a',
+                              background: seg.sampleId === activeSegmentSampleId ? theme.bgActive : theme.bgCard,
                               border: `1px solid ${seg.sampleId === activeSegmentSampleId ? SENSOR_COLORS[i % SENSOR_COLORS.length] : SENSOR_COLORS[i % SENSOR_COLORS.length] + '55'}`,
                               boxShadow: seg.sampleId === activeSegmentSampleId ? `0 0 0 1px ${SENSOR_COLORS[i % SENSOR_COLORS.length]}55` : 'none',
                               borderRadius: 6,
@@ -1395,11 +1578,11 @@ export default function App() {
                             title={seg.sampleId ? 'Click to focus this split sample' : undefined}
                           >
                             <div style={{ fontSize: 10, color: SENSOR_COLORS[i % SENSOR_COLORS.length], fontWeight: 700, marginBottom: 2 }}>Part {i + 1}</div>
-                            <div style={{ fontSize: 9, color: '#64748b', lineHeight: 1.5 }}>
-                              <div>Label: <span style={{ color: '#94a3b8' }}>{seg.label || activeBaseSample.label}</span></div>
-                              <div>Range: <span style={{ color: '#94a3b8' }}>{seg.start} → {seg.end}</span></div>
-                              <div>Length: <span style={{ color: '#94a3b8' }}>{seg.length} pts ({formatMs(seg.length * activeBaseSample.interval_ms)})</span></div>
-                              <div>File: <span style={{ color: '#475569' }}>{seg.filename}</span></div>
+                            <div style={{ fontSize: 9, color: theme.textMuted, lineHeight: 1.5 }}>
+                              <div>Label: <span style={{ color: theme.textSecondary }}>{seg.label || activeBaseSample.label}</span></div>
+                              <div>Range: <span style={{ color: theme.textSecondary }}>{seg.start} → {seg.end}</span></div>
+                              <div>Length: <span style={{ color: theme.textSecondary }}>{seg.length} pts ({formatMs(seg.length * activeBaseSample.interval_ms)})</span></div>
+                              <div>File: <span style={{ color: theme.textMuted }}>{seg.filename}</span></div>
                             </div>
                           </div>
                         ))}
@@ -1410,13 +1593,13 @@ export default function App() {
                 {viewSamples.length > 0 && (
                   <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: 8 }}>
                     {viewSamples.map(s => (
-                      <div key={s.id} style={{ background: s.id === activeId ? '#0a1e38' : '#080f1e', border: `1px solid ${s.id === activeId ? '#38bdf8' : '#1e293b'}`, borderRadius: 8, padding: 12 }}>
+                      <div key={s.id} style={{ background: s.id === activeId ? theme.bgActive : theme.bgPanel, border: `1px solid ${s.id === activeId ? theme.accent : theme.border}`, borderRadius: 8, padding: 12 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', marginBottom: 3 }}>{s.label}</div>
-                        {s.sampleName && <div style={{ fontSize: 9, color: '#334155', marginBottom: 3 }}>{s.sampleName}</div>}
-                        <div style={{ fontSize: 10, color: '#334155', lineHeight: 1.7 }}>
-                          <div>Points: <span style={{ color: '#64748b' }}>{s.values.length}</span></div>
-                          <div>Duration: <span style={{ color: '#64748b' }}>{formatMs(s.duration_ms)}</span></div>
-                          <div>Interval: <span style={{ color: '#64748b' }}>{s.interval_ms.toFixed(2)}ms</span></div>
+                        {s.sampleName && <div style={{ fontSize: 9, color: theme.textDim, marginBottom: 3 }}>{s.sampleName}</div>}
+                        <div style={{ fontSize: 10, color: theme.textDim, lineHeight: 1.7 }}>
+                          <div>Points: <span style={{ color: theme.textMuted }}>{s.values.length}</span></div>
+                          <div>Duration: <span style={{ color: theme.textMuted }}>{formatMs(s.duration_ms)}</span></div>
+                          <div>Interval: <span style={{ color: theme.textMuted }}>{s.interval_ms.toFixed(2)}ms</span></div>
                           <div>Category: <span style={{ color: s.category === 'testing' ? CATEGORY_COLORS.testing : CATEGORY_COLORS.training }}>{s.category}</span></div>
                           <div>Status: <span style={{ color: s.enabled ? '#34d399' : '#f87171' }}>{s.enabled ? 'enabled' : 'disabled'}</span></div>
                         </div>
@@ -1437,9 +1620,9 @@ export default function App() {
                   const tr = group.filter(s => s.category === 'training').length;
                   const te = group.filter(s => s.category === 'testing').length;
                   return (
-                    <div key={label} style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
-                      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9', flex: 1 }}>{label}</span>
+                    <div key={label} style={{ background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+                      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${theme.border}`, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: 13, color: theme.textPrimary, flex: 1 }}>{label}</span>
                         <span style={{ background: '#0d2040', color: '#60a5fa', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{group.length} files</span>
                         <span style={{ background: '#052e16', color: '#34d399', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{totalPts} pts</span>
                         <span style={{ background: '#1a1a40', color: '#a78bfa', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{formatMs(totalMs)}</span>
@@ -1451,9 +1634,9 @@ export default function App() {
                       <div style={{ padding: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                         {group.map(s => (
                           <div key={s.id} onClick={() => { setActiveId(s.id); setTab('waveform'); }}
-                            style={{ background: s.id === activeId ? '#0a1e38' : '#050c1a', borderTop: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderRight: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderBottom: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderLeft: `2px solid ${s.category === 'testing' ? CATEGORY_COLORS.testing + '88' : CATEGORY_COLORS.training + '88'}`, borderRadius: 5, padding: '5px 9px', cursor: 'pointer', fontSize: 9 }}>
-                            <div style={{ color: '#475569' }}>{s.values.length || '—'}pt</div>
-                            <div style={{ color: '#334155' }}>{formatMs(s.duration_ms)}</div>
+                            style={{ background: s.id === activeId ? theme.bgActive : theme.bgCard, borderTop: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderRight: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderBottom: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderLeft: `2px solid ${s.category === 'testing' ? CATEGORY_COLORS.testing + '88' : CATEGORY_COLORS.training + '88'}`, borderRadius: 5, padding: '5px 9px', cursor: 'pointer', fontSize: 9 }}>
+                            <div style={{ color: theme.textMuted }}>{s.values.length || '—'}pt</div>
+                            <div style={{ color: theme.textDim }}>{formatMs(s.duration_ms)}</div>
                             <div style={{ color: s.category === 'testing' ? CATEGORY_COLORS.testing : CATEGORY_COLORS.training, fontSize: 8 }}>{s.category === 'testing' ? 'TEST' : 'TRAIN'}</div>
                           </div>
                         ))}
@@ -1470,23 +1653,23 @@ export default function App() {
               <div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
                   {[['Samples', samples.length, '#38bdf8'], ['Labels', Object.keys(groupedByLabel).length, '#34d399'], ['Total Points', samples.reduce((a, s) => a + s.values.length, 0).toLocaleString(), '#fbbf24'], ['Total Duration', formatMs(samples.reduce((a, s) => a + s.duration_ms, 0)), '#a78bfa']].map(([k, v, c]) => (
-                    <div key={k} style={{ background: '#080f1e', border: `1px solid ${c}22`, borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                    <div key={k} style={{ background: theme.bgPanel, border: `1px solid ${c}22`, borderRadius: 10, padding: 14, textAlign: 'center' }}>
                       <div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div>
-                      <div style={{ fontSize: 9, color: '#334155', marginTop: 2, letterSpacing: 0.5 }}>{k}</div>
+                      <div style={{ fontSize: 9, color: theme.textDim, marginTop: 2, letterSpacing: 0.5 }}>{k}</div>
                     </div>
                   ))}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
                   {['training', 'testing'].map(cat => { const cs = samples.filter(s => s.category === cat); return (
-                    <div key={cat} style={{ background: '#080f1e', border: `1px solid ${CATEGORY_COLORS[cat]}33`, borderRadius: 10, padding: 14 }}>
+                    <div key={cat} style={{ background: theme.bgPanel, border: `1px solid ${CATEGORY_COLORS[cat]}33`, borderRadius: 10, padding: 14 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: CATEGORY_COLORS[cat], marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>{cat}</div>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: '#f1f5f9', marginBottom: 4 }}>{cs.length}</div>
-                      <div style={{ fontSize: 10, color: '#475569' }}>{cs.filter(s => s.enabled).length} enabled · {cs.filter(s => !s.enabled).length} disabled</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: theme.textPrimary, marginBottom: 4 }}>{cs.length}</div>
+                      <div style={{ fontSize: 10, color: theme.textMuted }}>{cs.filter(s => s.enabled).length} enabled · {cs.filter(s => !s.enabled).length} disabled</div>
                     </div>
                   ); })}
                 </div>
-                <div style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 10, padding: 14, marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#f1f5f9', marginBottom: 10 }}>Label Distribution</div>
+                <div style={{ background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 14, marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textPrimary, marginBottom: 10 }}>Label Distribution</div>
                   {Object.entries(groupedByLabel).sort(([, a], [, b]) => b.length - a.length).map(([label, group]) => {
                     const pct = Math.round((group.length / samples.length) * 100) || 0;
                     const tr = group.filter(s => s.category === 'training').length;
@@ -1494,12 +1677,12 @@ export default function App() {
                     return (
                       <div key={label} style={{ marginBottom: 8 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2, gap: 8 }}>
-                          <span style={{ color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+                          <span style={{ color: theme.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
                           <span style={{ color: CATEGORY_COLORS.training, flexShrink: 0 }}>{tr}tr</span>
                           <span style={{ color: CATEGORY_COLORS.testing, flexShrink: 0 }}>{te}te</span>
-                          <span style={{ color: '#475569', flexShrink: 0 }}>({pct}%)</span>
+                          <span style={{ color: theme.textMuted, flexShrink: 0 }}>({pct}%)</span>
                         </div>
-                        <div style={{ height: 5, background: '#050c1a', borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
+                        <div style={{ height: 5, background: theme.bgCard, borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
                           <div style={{ width: `${(tr / samples.length) * 100}%`, height: '100%', background: CATEGORY_COLORS.training }} />
                           <div style={{ width: `${(te / samples.length) * 100}%`, height: '100%', background: CATEGORY_COLORS.testing }} />
                         </div>
@@ -1507,8 +1690,8 @@ export default function App() {
                     );
                   })}
                 </div>
-                <div style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 10, padding: 14 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#f1f5f9', marginBottom: 8 }}>Channels ({sensors.length})</div>
+                <div style={{ background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textPrimary, marginBottom: 8 }}>Channels ({sensors.length})</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                     {sensors.map((s, i) => (
                       <span key={s} style={{ background: SENSOR_COLORS[i % SENSOR_COLORS.length] + '18', border: `1px solid ${SENSOR_COLORS[i % SENSOR_COLORS.length]}55`, color: SENSOR_COLORS[i % SENSOR_COLORS.length], borderRadius: 4, padding: '2px 8px', fontSize: 10, fontFamily: 'inherit' }}>{s}</span>
@@ -1517,9 +1700,19 @@ export default function App() {
                 </div>
               </div>
             )}
+            {/* ── WINDOWS ── */}
+            {tab === 'windows' && (
+              <WindowedCountTab samples={samples} theme={theme} />
+            )}
+
+            {/* ── PREDICT ── */}
+            {tab === 'predict' && (
+              <PredictTab samples={samples} sensors={sensors} activeSample={activeSample} theme={theme} />
+            )}
           </div>
         </div>
       </div>
     </div>
+    </ThemeContext.Provider>
   );
 }

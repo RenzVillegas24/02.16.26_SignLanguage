@@ -12,68 +12,95 @@ import { groupSensorsByDiscriminant } from '../utils/flatDetector';
 import { getSensorGroup } from './WaveformViewer';
 
 // ─── Batch preview ─────────────────────────────────────────────────────────
-function BatchGraphs({ samples, batchStates, sensors, visSensors, padInfo, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample }) {
+function BatchGraphs({ samples, batchStates, sensors, visSensors: initialVisSensors, padInfo,
+  onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample, onBatchCutsChange }) {
+
+  // Per-panel local sensor visibility (starts from global visSensors)
+  const [visSensors, setVisSensors] = useState(() => new Set(initialVisSensors || sensors.slice(0, 6)));
+
+  const toggleSensor = s => setVisSensors(p => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
+  const allOn  = sensors.every(s => visSensors.has(s));
+  const allOff = sensors.every(s => !visSensors.has(s));
+
   return (
-    <div style={{ maxHeight: '50vh', overflowY: 'auto', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {samples.map((smpl) => {
-        const state = batchStates[smpl.id] || { cuts: [], removedSegs: new Set() };
-        const totalSegs = (state.cuts?.length || 0) + 1;
-        return (
-          <div key={smpl.id} style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ flex: 1, minWidth: 0 }}>
-                {smpl.label} {smpl.sampleName ? <span style={{ color: '#64748b' }}>· {smpl.sampleName}</span> : ''}
-                <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8 }}>
-                  {totalSegs - state.removedSegs.size} / {totalSegs} kept
+    <div style={{ marginTop: 10 }}>
+      {/* Global sensor selector for all batch previews */}
+      <div style={{ background: '#060d1a', border: '1px solid #1e293b', borderRadius: 8, padding: '7px 10px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 9, color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap' }}>Preview channels:</span>
+        <button onClick={() => setVisSensors(new Set(sensors))}
+          style={{ background: allOn ? '#0d2040' : 'none', border: `1px solid ${allOn ? '#3b82f6' : '#1e293b'}`, color: allOn ? '#60a5fa' : '#475569', borderRadius: 4, padding: '1px 7px', fontSize: 8, cursor: 'pointer', fontFamily: 'inherit' }}>
+          All
+        </button>
+        <button onClick={() => setVisSensors(new Set())}
+          style={{ background: allOff ? '#1a0808' : 'none', border: `1px solid ${allOff ? '#7f1d1d' : '#1e293b'}`, color: allOff ? '#f87171' : '#475569', borderRadius: 4, padding: '1px 7px', fontSize: 8, cursor: 'pointer', fontFamily: 'inherit' }}>
+          None
+        </button>
+        <div style={{ width: 1, height: 12, background: '#1e293b' }} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {sensors.map((s, i) => {
+            const on = visSensors.has(s);
+            return (
+              <button key={s} onClick={() => toggleSensor(s)} style={{
+                background: on ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '22' : '#050c1a',
+                border: `1px solid ${on ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
+                color: on ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#334155',
+                borderRadius: 3, padding: '1px 5px', fontSize: 8, cursor: 'pointer',
+                fontFamily: 'monospace', fontWeight: on ? 700 : 400,
+              }}>{s}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Per-sample cards */}
+      <div style={{ maxHeight: '50vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {samples.map((smpl) => {
+          const state = batchStates[smpl.id] || { cuts: [], removedSegs: new Set() };
+          const totalSegs = (state.cuts?.length || 0) + 1;
+          return (
+            <div key={smpl.id} style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  {smpl.label}{smpl.sampleName ? <span style={{ color: '#64748b' }}> · {smpl.sampleName}</span> : ''}
+                  <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8 }}>
+                    {totalSegs - state.removedSegs.size}/{totalSegs} kept
+                  </span>
                 </span>
-              </span>
-              <button
-                onClick={() => onRemoveSample?.(smpl.id)}
-                style={{ background: '#450a0a', border: '1px solid #7f1d1d', color: '#f87171', borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}
-                title="Remove this sample from batch split"
-              >
-                Remove
-              </button>
-            </div>
-            <SplitPreviewCanvas
-              values={smpl.values} sensors={sensors} interval_ms={smpl.interval_ms}
-              cutPoints={state.cuts}
-              removedSegments={state.removedSegs}
-              onToggleRemove={(idx) => onToggleRemove(smpl.id, idx)}
-              onCombineLeft={(idx) => onCombineLeft(smpl.id, idx)}
-              onCombineRight={(idx) => onCombineRight(smpl.id, idx)}
-              onSplitSegment={(idx) => onSplitSegment(smpl.id, idx)}
-              activeSensors={visSensors}
-              padding={padInfo}
-              height={140}
-            />
-            <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {Array.from({ length: totalSegs }, (_, i) => {
-                const kept = !state.removedSegs.has(i);
-                return (
-                  <button
-                    key={i}
-                    onClick={() => onToggleRemove(smpl.id, i)}
-                    style={{
+                <button onClick={() => onRemoveSample?.(smpl.id)}
+                  style={{ background: '#450a0a', border: '1px solid #7f1d1d', color: '#f87171', borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  Remove
+                </button>
+              </div>
+              <SplitPreviewCanvas
+                values={smpl.values} sensors={sensors} interval_ms={smpl.interval_ms}
+                cutPoints={state.cuts}
+                removedSegments={state.removedSegs}
+                onToggleRemove={idx => onToggleRemove(smpl.id, idx)}
+                onCombineLeft={idx => onCombineLeft(smpl.id, idx)}
+                onCombineRight={idx => onCombineRight(smpl.id, idx)}
+                onSplitSegment={idx => onSplitSegment(smpl.id, idx)}
+                onCutsChange={newCuts => onBatchCutsChange?.(smpl.id, newCuts)}
+                activeSensors={visSensors}
+                padding={padInfo}
+                height={140}
+              />
+              <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                {Array.from({ length: totalSegs }, (_, i) => {
+                  const kept = !state.removedSegs.has(i);
+                  return (
+                    <button key={i} onClick={() => onToggleRemove(smpl.id, i)} style={{
                       background: kept ? '#052e16' : '#450a0a44',
                       border: `1px solid ${kept ? '#166534' : '#7f1d1d'}`,
                       color: kept ? '#34d399' : '#f87171',
-                      borderRadius: 4,
-                      padding: '2px 8px',
-                      fontSize: 9,
-                      cursor: 'pointer',
-                      fontFamily: 'monospace',
-                    }}
-                    title={kept ? 'Click to exclude segment' : 'Click to include segment'}
-                  >
-                    S{i + 1} {kept ? '✓' : '✕'}
-                  </button>
-                );
-              })}
+                      borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer', fontFamily: 'monospace',
+                    }}>S{i + 1} {kept ? '✓' : '✕'}</button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -230,7 +257,13 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   const [padUnit, setPadUnit]       = useState(lastAlgoStore.padUnit);
   const [padRandom, setPadRandom]   = useState(lastAlgoStore.padRandom);
 
-  // Predicted-flat behavior
+  // Target duration — crops each kept segment to a random duration from [durLo, durHi]
+  // Alignment controls where the crop window anchors within the original segment.
+  const [enableDur, setEnableDur]   = useState(lastAlgoStore.durEnabled ?? false);
+  const [durLo, setDurLo]           = useState(lastAlgoStore.durLo ?? 50);
+  const [durHi, setDurHi]           = useState(lastAlgoStore.durHi ?? 100);
+  const [durUnit, setDurUnit]       = useState(lastAlgoStore.durUnit ?? 'pts');
+  const [durAlign, setDurAlign]     = useState(lastAlgoStore.durAlign ?? 'center'); // 'start'|'center'|'end'|'random'
   const [autoDisableFlat, setAutoDisableFlat] = useState(Boolean(lastAlgoStore.flatAutoDisable));
 
   const getFlatRemovedSegs = useCallback((cutList, flatRegions, totalLen) => {
@@ -284,11 +317,13 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
       equalParts,
       shiftEnabled: enableShift, shiftLo, shiftHi, shiftUnit,
       padEnabled: enablePad, padLo, padHi, padUnit, padRandom,
+      durEnabled: enableDur, durLo, durHi, durUnit, durAlign,
       flatAutoDisable: autoDisableFlat,
     });
   }, [mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
       equalParts, enableShift, shiftLo, shiftHi, shiftUnit,
-      enablePad, padLo, padHi, padUnit, padRandom, autoDisableFlat]);
+      enablePad, padLo, padHi, padUnit, padRandom,
+      enableDur, durLo, durHi, durUnit, durAlign, autoDisableFlat]);
 
   // ── Derived ────────────────────────────────────────────────────────────
   const allCuts    = useMemo(() => [0, ...cuts, N].sort((a, b) => a - b), [cuts, N]);
@@ -419,6 +454,25 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   }, [isBatch, batchSamples.length, recalc]);
 
   // ── Execute split ──────────────────────────────────────────────────────
+  // Helper: crop a [start,end] segment to a random target duration from [durLo,durHi].
+  const applyDuration = (start, end, totalLen, imsRate) => {
+    if (!enableDur) return { start, end };
+    const toPts = v => durUnit === 'ms' ? Math.round(v / imsRate) : Math.round(v);
+    const lo = toPts(Math.min(durLo, durHi));
+    const hi = toPts(Math.max(durLo, durHi));
+    const target = lo + Math.round(Math.random() * (hi - lo));
+    const segLen = end - start;
+    if (target >= segLen) return { start, end }; // segment shorter than target → keep as-is
+    // Anchor the crop window
+    let cropStart;
+    if (durAlign === 'start')  cropStart = start;
+    else if (durAlign === 'end') cropStart = end - target;
+    else if (durAlign === 'random') cropStart = start + Math.round(Math.random() * (segLen - target));
+    else /* center */ cropStart = start + Math.round((segLen - target) / 2);
+    cropStart = Math.max(0, Math.min(totalLen - target, cropStart));
+    return { start: cropStart, end: Math.min(totalLen, cropStart + target) };
+  };
+
   const doSplit = () => {
     if (isBatch) {
       if (!Object.keys(batchStates).length) return;
@@ -454,7 +508,10 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           }
           return { idx: i, start, end, values: smpl.values.slice(start, end) };
         });
-        const keptRecords = allPartRecords.filter(r => !sr.has(r.idx));
+        const keptRecords = allPartRecords.filter(r => !sr.has(r.idx)).map(r => {
+          const { start: cs, end: ce } = applyDuration(r.start, r.end, smpl.values.length, smpl.interval_ms);
+          return { ...r, start: cs, end: ce, values: smpl.values.slice(cs, ce) };
+        });
         const finalParts = keptRecords.map(r => r.values);
         finalBatch.push({
           sample: smpl,
@@ -501,7 +558,10 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         }
         return { idx: i, start, end, values: values.slice(start, end) };
       });
-      const keptRecords = allPartRecords.filter(r => !removedSegs.has(r.idx));
+      const keptRecords = allPartRecords.filter(r => !removedSegs.has(r.idx)).map(r => {
+        const { start: cs, end: ce } = applyDuration(r.start, r.end, N, interval_ms);
+        return { ...r, start: cs, end: ce, values: values.slice(cs, ce) };
+      });
       const finalParts = keptRecords.map(r => r.values);
       onSplit(sample, finalParts, partLabels, {
         cuts: finalCuts,
@@ -580,6 +640,15 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
       const n = { ...p };
       delete n[smplId];
       return n;
+    });
+  };
+
+  // Direct drag edit of cuts in batch preview
+  const handleBatchCutsChange = (smplId, newCuts) => {
+    setBatchStates(p => {
+      const state = p[smplId];
+      if (!state) return p;
+      return { ...p, [smplId]: { ...state, cuts: newCuts } };
     });
   };
 
@@ -872,6 +941,67 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
             )}
           </div>
 
+          {/* ── Target Duration ── */}
+          <div style={{ background: '#050c1a', border: `1px solid ${enableDur ? '#38bdf855' : '#1e293b'}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enableDur ? 14 : 0 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <input type="checkbox" checked={enableDur} onChange={e => setEnableDur(e.target.checked)} style={{ accentColor: '#38bdf8', width: 13, height: 13 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: enableDur ? '#38bdf8' : '#64748b' }}>Target Duration</span>
+              </label>
+              {enableDur && <span style={{ fontSize: 9, color: '#64748b' }}>Crops each kept segment to a random length from this range</span>}
+            </div>
+            {enableDur && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {/* Unit toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10, color: '#64748b', minWidth: 32 }}>Unit</span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {['pts', 'ms'].map(u => (
+                      <button key={u} onClick={() => setDurUnit(u)} style={{
+                        background: durUnit === u ? '#0d2040' : '#060d1a',
+                        border: `1px solid ${durUnit === u ? '#38bdf8' : '#1e293b'}`,
+                        color: durUnit === u ? '#38bdf8' : '#64748b',
+                        borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
+                      }}>{u}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* Duration range */}
+                <RangePair
+                  lo={durLo} hi={durHi}
+                  onLoChange={setDurLo} onHiChange={setDurHi}
+                  unit={durUnit} interval_ms={interval_ms}
+                  color="#38bdf8"
+                  SI={SI}
+                />
+                {/* Alignment */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, color: '#64748b', minWidth: 52 }}>Anchor at</span>
+                  {[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['random', 'Random']].map(([v, l]) => (
+                    <button key={v} onClick={() => setDurAlign(v)} style={{
+                      background: durAlign === v ? '#0d2040' : '#060d1a',
+                      border: `1px solid ${durAlign === v ? '#38bdf8' : '#1e293b'}`,
+                      color: durAlign === v ? '#38bdf8' : '#64748b',
+                      borderRadius: 4, padding: '3px 9px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
+                      fontWeight: durAlign === v ? 700 : 400,
+                    }}>{l}</button>
+                  ))}
+                  <span style={{ fontSize: 9, color: '#334155' }}>
+                    {durAlign === 'start'  ? '— crop from beginning'   :
+                     durAlign === 'end'    ? '— crop from end'          :
+                     durAlign === 'center' ? '— centered on segment'   :
+                     '— random offset within segment'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 9, color: '#64748b', background: '#0d204018', border: '1px solid #38bdf822', borderRadius: 5, padding: '5px 10px' }}>
+                  Per segment: duration &isin; [{durLo}, {durHi}] {durUnit}
+                  {durUnit === 'pts' && <> &nbsp;&middot;&nbsp; {formatMs(durLo * interval_ms)} → {formatMs(durHi * interval_ms)}</>}
+                  &nbsp;&middot;&nbsp; segments shorter than target are kept as-is
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Sensor vis toggles */}
           {!isBatch && (
             <>
@@ -1005,6 +1135,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                 onCombineLeft={handleCombineLeft}
                 onCombineRight={handleCombineRight}
                 onSplitSegment={handleSplitSegment}
+                onCutsChange={newCuts => { setCuts(newCuts); setMode('manual'); }}
                 activeSensors={visSensors}
                 padding={padInfo}
                 height={250}
@@ -1082,6 +1213,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               onCombineRight={handleBatchCombineRight}
               onSplitSegment={handleBatchSplitSegment}
               onRemoveSample={handleBatchRemoveSample}
+              onBatchCutsChange={handleBatchCutsChange}
             />
           )}
 
@@ -1093,6 +1225,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
                 {removedSegs.size > 0 && <span style={{ color: '#f87171' }}>· {removedSegs.size} removed</span>}
                 {enableShift && <span style={{ color: '#fbbf24' }}>· shift [{shiftLo},{shiftHi}]{shiftUnit}</span>}
                 {enablePad && <span style={{ color: '#a78bfa' }}>· pad {padRandom ? `[${padLo},${padHi}] random` : `${padLo}–${padHi}`}{padUnit}</span>}
+                {enableDur && <span style={{ color: '#38bdf8' }}>· dur [{durLo},{durHi}]{durUnit} @{durAlign}</span>}
               </>}
               {isBatch && <span style={{ color: '#34d399' }}>{totalKept} total segments</span>}
             </div>

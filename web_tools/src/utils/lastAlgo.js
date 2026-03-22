@@ -34,6 +34,13 @@ export const lastAlgoStore = {
   padUnit: 'pts',
   padRandom: false,
 
+  // Target duration — crops each kept segment to a random duration from [durLo, durHi]
+  durEnabled: false,
+  durLo: 50,
+  durHi: 100,
+  durUnit: 'pts',
+  durAlign: 'center', // 'start' | 'center' | 'end' | 'random'
+
   // Predicted Flat
   flatWindowSize: 20,
   flatThreshold: 1.5,

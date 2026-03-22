@@ -2,6 +2,7 @@ import { useState, memo } from 'react';
 import { Scissors, Circle, CircleDot, X, Tag, FlaskConical, Dumbbell } from 'lucide-react';
 import { formatMs } from '../utils/parse';
 import { CATEGORY_COLORS } from '../utils/colors';
+import { useTheme } from '../utils/ThemeContext';
 import MiniChart from './MiniChart';
 
 const SampleCard = memo(function SampleCard({
@@ -9,25 +10,26 @@ const SampleCard = memo(function SampleCard({
   onSelect, onActivate, onDelete, onRename,
   onToggleEnabled, onToggleCategory, onSplit,
 }) {
+  const theme = useTheme();
   const [editing, setEditing] = useState(false);
   const [newLabel, setNewLabel] = useState(sample.label);
 
   const edgeColor = sample.enabled
     ? (sample.category === 'testing' ? CATEGORY_COLORS.testing : CATEGORY_COLORS.training)
     : '#4b1113';
-  const borderColor = active ? '#38bdf8' : selected ? '#2563eb66' : '#1a2540';
+  const borderColor = active ? theme.accent : selected ? theme.accentAlt + '55' : theme.border;
 
   // ── Badges row ─────────────────────────────────────────────────────────
   const badges = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
       <span style={{
-        background: '#0a1a33', color: '#60a5fa', fontSize: 9,
+        background: theme.bgPanel, color: '#60a5fa', fontSize: 9,
         borderRadius: 3, padding: '1px 5px', fontFamily: 'inherit', letterSpacing: 0.3,
       }}>
         {(sample.values.length || 0).toLocaleString()} pt
       </span>
       <span style={{
-        background: '#091a12', color: '#34d399', fontSize: 9,
+        background: theme.bgPanel, color: '#34d399', fontSize: 9,
         borderRadius: 3, padding: '1px 5px', fontFamily: 'inherit',
       }}>
         {formatMs(sample.duration_ms)}
@@ -52,7 +54,7 @@ const SampleCard = memo(function SampleCard({
       {sample.fromLabels && (
         <span style={{
           display: 'flex', alignItems: 'center', gap: 2,
-          background: '#1a1106', color: '#fbbf24', fontSize: 8,
+          background: theme.bgPanel, color: '#fbbf24', fontSize: 8,
           borderRadius: 3, padding: '1px 4px',
         }}>
           <Tag size={7} strokeWidth={2} /> ref
@@ -60,7 +62,7 @@ const SampleCard = memo(function SampleCard({
       )}
       {sample.splitBaseId && (
         <span style={{
-          background: '#0d1f1a', color: '#2dd4bf', fontSize: 8,
+          background: theme.bgPanel, color: '#2dd4bf', fontSize: 8,
           borderRadius: 3, padding: '1px 4px', fontFamily: 'inherit',
         }}>
           seg
@@ -78,7 +80,7 @@ const SampleCard = memo(function SampleCard({
           title="Split sample"
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: '#1a1008', border: '1px solid #78350f',
+            background: theme.bgPanel, border: '1px solid #78350f',
             color: '#fbbf24', borderRadius: 3,
             width: 20, height: 20, cursor: 'pointer', flexShrink: 0,
           }}
@@ -128,7 +130,7 @@ const SampleCard = memo(function SampleCard({
         if (e.key === 'Escape') { setEditing(false); setNewLabel(sample.label); }
       }}
       style={{
-        background: '#050c1a', color: '#f1f5f9',
+        background: theme.bgCard, color: '#f1f5f9',
         border: '1px solid #3b82f6', borderRadius: 4,
         padding: '2px 6px', fontSize: 11, flex: 1, fontFamily: 'inherit',
       }}
@@ -140,7 +142,7 @@ const SampleCard = memo(function SampleCard({
         style={{
           fontWeight: 600,
           fontSize: viewMode === 'grid' ? 10 : 11,
-          color: active ? '#e2e8f0' : '#94a3b8',
+          color: active ? theme.textPrimary : theme.textSecondary,
           display: 'block', overflow: 'hidden',
           textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           letterSpacing: 0.1,
@@ -152,7 +154,7 @@ const SampleCard = memo(function SampleCard({
       </span>
       {sample.sampleName && (
         <span style={{
-          fontSize: 8, color: '#2d4060', display: 'block',
+          fontSize: 8, color: theme.textDim, display: 'block',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {sample.sampleName}
@@ -162,7 +164,7 @@ const SampleCard = memo(function SampleCard({
   );
 
   const baseStyle = {
-    background: active ? '#091d38' : selected ? '#071428' : '#080f1e',
+    background: active ? theme.bgActive : selected ? theme.bgSelected : theme.bgPanel,
     borderTop: `1px solid ${borderColor}`,
     borderRight: `1px solid ${borderColor}`,
     borderBottom: `1px solid ${borderColor}`,
