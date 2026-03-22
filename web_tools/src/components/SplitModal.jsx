@@ -12,8 +12,7 @@ import { groupSensorsByDiscriminant } from '../utils/flatDetector';
 import { getSensorGroup } from './WaveformViewer';
 
 // ─── Batch preview ─────────────────────────────────────────────────────────
-function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, padMin, padMax, padUnit, padRandom, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample }) {
-  const padInfo = enablePad ? { min: padMin, max: padMax, unit: padUnit, random: padRandom } : null;
+function BatchGraphs({ samples, batchStates, sensors, visSensors, padInfo, onToggleRemove, onCombineLeft, onCombineRight, onSplitSegment, onRemoveSample }) {
   return (
     <div style={{ maxHeight: '50vh', overflowY: 'auto', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 16 }}>
       {samples.map((smpl) => {
@@ -79,6 +78,89 @@ function BatchGraphs({ samples, batchStates, sensors, visSensors, enablePad, pad
   );
 }
 
+// ─── Range pair input (lo–hi for a single boundary) ──────────────────────
+// ─── Range pair input — defines a [lo, hi] interval ──────────────────────
+// For shift: each cut is shifted by a value sampled uniformly from [lo, hi]
+// For padding: each segment gets a pad sampled uniformly from [lo, hi] (or fixed lo when not random)
+function RangePair({ label, hint, lo, hi, onLoChange, onHiChange, unit, interval_ms, color = '#94a3b8', allowNegative = false, SI }) {
+  const toMs = v => {
+    if (unit !== 'pts' || !interval_ms) return '';
+    const ms = Math.abs(v) * interval_ms;
+    return ms < 1000 ? ` (${ms.toFixed(0)}ms)` : ` (${(ms / 1000).toFixed(2)}s)`;
+  };
+
+  // Number line: spans from min(lo,hi,0) to max(lo,hi,0) with padding
+  const a = Math.min(lo, hi), b = Math.max(lo, hi);
+  const lineMin = Math.min(a, allowNegative ? a : 0, 0);
+  const lineMax = Math.max(b, 0);
+  const lineSpan = lineMax - lineMin || 1;
+
+  // Positions as % of the line
+  const loPos   = ((a - lineMin) / lineSpan) * 100;
+  const hiPos   = ((b - lineMin) / lineSpan) * 100;
+  const zeroPos = ((0 - lineMin) / lineSpan) * 100;
+  const fillW   = hiPos - loPos;
+
+  return (
+    <div>
+      {(label || hint) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          {label && <span style={{ fontSize: 10, fontWeight: 600, color }}>{label}</span>}
+          {hint && <span style={{ fontSize: 9, color: '#334155' }}>{hint}</span>}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* From input */}
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 9, color: '#475569', marginBottom: 3 }}>From</div>
+          <input type="number" value={lo}
+            onChange={e => onLoChange(allowNegative ? Number(e.target.value) : Math.max(0, Number(e.target.value)))}
+            style={{ ...SI, width: 72, textAlign: 'center' }} />
+          <div style={{ fontSize: 8, color: '#334155', marginTop: 2, fontFamily: 'monospace' }}>{lo}{unit}{toMs(lo)}</div>
+        </div>
+
+        {/* Number line */}
+        <div style={{ flex: 1, minWidth: 90 }}>
+          <div style={{ position: 'relative', height: 24 }}>
+            {/* Track */}
+            <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 4, background: '#1a2540', borderRadius: 2, transform: 'translateY(-50%)' }} />
+            {/* Filled range */}
+            <div style={{
+              position: 'absolute', top: '50%', height: 4,
+              left: `${Math.max(0, loPos)}%`,
+              width: `${Math.min(100 - Math.max(0, loPos), Math.max(0, fillW))}%`,
+              background: color + 'cc', borderRadius: 2, transform: 'translateY(-50%)',
+            }} />
+            {/* Zero marker */}
+            {zeroPos >= 0 && zeroPos <= 100 && (
+              <div style={{ position: 'absolute', top: '15%', height: '70%', width: 2, background: '#475569', left: `${zeroPos}%`, transform: 'translateX(-50%)' }} />
+            )}
+            {/* Lo dot */}
+            <div style={{ position: 'absolute', top: '50%', left: `${loPos}%`, width: 9, height: 9, background: color, borderRadius: '50%', transform: 'translate(-50%, -50%)', border: '2px solid #0a1628', zIndex: 1 }} />
+            {/* Hi dot */}
+            <div style={{ position: 'absolute', top: '50%', left: `${hiPos}%`, width: 9, height: 9, background: color, borderRadius: '50%', transform: 'translate(-50%, -50%)', border: '2px solid #0a1628', zIndex: 1 }} />
+          </div>
+          {/* Axis labels */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#334155', marginTop: 1 }}>
+            <span>{lineMin}{unit}</span>
+            <span style={{ color, fontWeight: 700 }}>{lo} → {hi}</span>
+            <span>{lineMax}{unit}</span>
+          </div>
+        </div>
+
+        {/* To input */}
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 9, color: '#475569', marginBottom: 3 }}>To</div>
+          <input type="number" value={hi}
+            onChange={e => onHiChange(allowNegative ? Number(e.target.value) : Math.max(0, Number(e.target.value)))}
+            style={{ ...SI, width: 72, textAlign: 'center' }} />
+          <div style={{ fontSize: 8, color: '#334155', marginTop: 2, fontFamily: 'monospace' }}>{hi}{unit}{toMs(hi)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Slider helper ─────────────────────────────────────────────────────────
 function Sldr({ label: l, value, min, max, step = 1, fmt, onChange }) {
   return (
@@ -134,17 +216,17 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   const [numParts, setNumParts]     = useState(lastAlgoStore.numParts);
   const [equalParts, setEqualParts] = useState(lastAlgoStore.equalParts || 4);
 
-  // Random shift
+  // Random shift — min and max are each a [lo, hi] range
   const [enableShift, setEnableShift] = useState(lastAlgoStore.shiftEnabled);
-  const [shiftMin, setShiftMin]       = useState(lastAlgoStore.shiftMin);
-  const [shiftMax, setShiftMax]       = useState(lastAlgoStore.shiftMax);
+  const [shiftLo, setShiftLo] = useState(lastAlgoStore.shiftLo ?? -10);
+  const [shiftHi, setShiftHi] = useState(lastAlgoStore.shiftHi ?? 10);
   const [shiftUnit, setShiftUnit]     = useState(lastAlgoStore.shiftUnit);
-  const [shiftPreview, setShiftPreview] = useState([]); // simulated shifted cuts for preview
+  const [shiftPreview, setShiftPreview] = useState([]);
 
-  // Padding on kept segments
+  // Padding — min and max are each a [lo, hi] range
   const [enablePad, setEnablePad]   = useState(lastAlgoStore.padEnabled);
-  const [padMin, setPadMin]         = useState(Number(lastAlgoStore.padMin ?? 0));
-  const [padMax, setPadMax]         = useState(Number(lastAlgoStore.padMax ?? 0));
+  const [padLo, setPadLo] = useState(lastAlgoStore.padLo ?? 3);
+  const [padHi, setPadHi] = useState(lastAlgoStore.padHi ?? 10);
   const [padUnit, setPadUnit]       = useState(lastAlgoStore.padUnit);
   const [padRandom, setPadRandom]   = useState(lastAlgoStore.padRandom);
 
@@ -200,13 +282,13 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
     Object.assign(lastAlgoStore, {
       mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
       equalParts,
-      shiftEnabled: enableShift, shiftMin, shiftMax, shiftUnit,
-      padEnabled: enablePad, padMin, padMax, padUnit, padRandom,
+      shiftEnabled: enableShift, shiftLo, shiftHi, shiftUnit,
+      padEnabled: enablePad, padLo, padHi, padUnit, padRandom,
       flatAutoDisable: autoDisableFlat,
     });
   }, [mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
-      equalParts, enableShift, shiftMin, shiftMax, shiftUnit,
-      enablePad, padMin, padMax, padUnit, padRandom, autoDisableFlat]);
+      equalParts, enableShift, shiftLo, shiftHi, shiftUnit,
+      enablePad, padLo, padHi, padUnit, padRandom, autoDisableFlat]);
 
   // ── Derived ────────────────────────────────────────────────────────────
   const allCuts    = useMemo(() => [0, ...cuts, N].sort((a, b) => a - b), [cuts, N]);
@@ -249,19 +331,18 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
     });
   };
 
-  // Generate a shift preview (simulate random shift visually)
+  // Generate shift preview — each cut is shifted by a value sampled uniformly from [shiftLo, shiftHi]
   const generateShiftPreview = useCallback(() => {
     if (!enableShift || !cuts.length) { setShiftPreview([]); return; }
-    const shiftLoRaw = shiftUnit === 'ms' ? Math.round(shiftMin / interval_ms) : Math.round(shiftMin);
-    const shiftHiRaw = shiftUnit === 'ms' ? Math.round(shiftMax / interval_ms) : Math.round(shiftMax);
-    const lo = Math.min(shiftLoRaw, shiftHiRaw);
-    const hi = Math.max(shiftLoRaw, shiftHiRaw);
+    const topts = v => shiftUnit === 'ms' ? Math.round(v / interval_ms) : Math.round(v);
+    const lo = topts(Math.min(shiftLo, shiftHi));
+    const hi = topts(Math.max(shiftLo, shiftHi));
     const preview = cuts.map(c => {
       const shift = Math.round(lo + Math.random() * (hi - lo));
       return Math.max(1, Math.min(N - 1, c + shift));
     }).sort((a, b) => a - b);
     setShiftPreview(preview);
-  }, [enableShift, cuts, shiftMin, shiftMax, shiftUnit, interval_ms, N]);
+  }, [enableShift, cuts, shiftLo, shiftHi, shiftUnit, interval_ms, N]);
 
   useEffect(() => { generateShiftPreview(); }, [generateShiftPreview]);
 
@@ -348,13 +429,12 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         const currentCuts = state.cuts || [];
         const sr = state.removedSegs || new Set();
         
-        // shift
+        // shift — sample each cut's shift uniformly from [shiftLo, shiftHi]
         let finalCuts = [...currentCuts];
         if (enableShift) {
-          const shiftLoRaw = shiftUnit === 'ms' ? Math.round(shiftMin / smpl.interval_ms) : Math.round(shiftMin);
-          const shiftHiRaw = shiftUnit === 'ms' ? Math.round(shiftMax / smpl.interval_ms) : Math.round(shiftMax);
-          const lo = Math.min(shiftLoRaw, shiftHiRaw);
-          const hi = Math.max(shiftLoRaw, shiftHiRaw);
+          const topts = v => shiftUnit === 'ms' ? Math.round(v / smpl.interval_ms) : Math.round(v);
+          const lo = topts(Math.min(shiftLo, shiftHi));
+          const hi = topts(Math.max(shiftLo, shiftHi));
           finalCuts = currentCuts.map(c => {
             const shift = Math.round(lo + Math.random() * (hi - lo));
             return Math.max(1, Math.min(smpl.values.length - 1, c + shift));
@@ -365,11 +445,10 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         const allPartRecords = fc.slice(0, -1).map((s, i) => {
           let start = s, end = fc[i + 1];
           if (enablePad && !sr.has(i)) {
-            const padLoRaw = padUnit === 'ms' ? padMin / smpl.interval_ms : padMin;
-            const padHiRaw = padUnit === 'ms' ? padMax / smpl.interval_ms : padMax;
-            const lo = Math.min(padLoRaw, padHiRaw);
-            const hi = Math.max(padLoRaw, padHiRaw);
-            const actualPad = padRandom ? Math.round(lo + Math.random() * (hi - lo)) : Math.round(lo);
+            const top = v => padUnit === 'ms' ? v / smpl.interval_ms : v;
+            const padLoP = top(Math.min(padLo, padHi));
+            const padHiP = top(Math.max(padLo, padHi));
+            const actualPad = padRandom ? Math.round(padLoP + Math.random() * (padHiP - padLoP)) : Math.round(padLoP);
             start = Math.max(0, start - actualPad);
             end   = Math.min(smpl.values.length, end + actualPad);
           }
@@ -396,13 +475,12 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
       onBatchSplit(finalBatch, {});
     }
     else {
-      // Apply random shift if enabled
+      // Apply random shift — sample each cut's shift uniformly from [shiftLo, shiftHi]
       let finalCuts = [...cuts];
       if (enableShift) {
-        const shiftLoRaw = shiftUnit === 'ms' ? Math.round(shiftMin / interval_ms) : Math.round(shiftMin);
-        const shiftHiRaw = shiftUnit === 'ms' ? Math.round(shiftMax / interval_ms) : Math.round(shiftMax);
-        const lo = Math.min(shiftLoRaw, shiftHiRaw);
-        const hi = Math.max(shiftLoRaw, shiftHiRaw);
+        const topts = v => shiftUnit === 'ms' ? Math.round(v / interval_ms) : Math.round(v);
+        const lo = topts(Math.min(shiftLo, shiftHi));
+        const hi = topts(Math.max(shiftLo, shiftHi));
         finalCuts = cuts.map(c => {
           const shift = Math.round(lo + Math.random() * (hi - lo));
           return Math.max(1, Math.min(N - 1, c + shift));
@@ -414,11 +492,10 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
       const allPartRecords = fc.slice(0, -1).map((s, i) => {
         let start = s, end = fc[i + 1];
         if (enablePad && !removedSegs.has(i)) {
-          const padLoRaw = padUnit === 'ms' ? padMin / interval_ms : padMin;
-          const padHiRaw = padUnit === 'ms' ? padMax / interval_ms : padMax;
-          const lo = Math.min(padLoRaw, padHiRaw);
-          const hi = Math.max(padLoRaw, padHiRaw);
-          const actualPad = padRandom ? Math.round(lo + Math.random() * (hi - lo)) : Math.round(lo);
+          const top = v => padUnit === 'ms' ? v / interval_ms : v;
+          const padLoP = top(Math.min(padLo, padHi));
+          const padHiP = top(Math.max(padLo, padHi));
+          const actualPad = padRandom ? Math.round(padLoP + Math.random() * (padHiP - padLoP)) : Math.round(padLoP);
           start = Math.max(0, start - actualPad);
           end   = Math.min(N, end + actualPad);
         }
@@ -509,26 +586,33 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
   // Cuts to show in single-sample preview — shifted if enabled
   const previewCuts = enableShift && shiftPreview.length ? shiftPreview : cuts;
 
-  // For batch: apply simulated shift to each sample's cuts for the preview display
+  // For batch preview: apply simulated shift using sampled min/max ranges
   const batchPreviewStates = useMemo(() => {
     if (!isBatch || !enableShift) return batchStates;
-    const lo = shiftUnit === 'ms' ? shiftMin / (primarySample.interval_ms || 33.33) : shiftMin;
-    const hi = shiftUnit === 'ms' ? shiftMax / (primarySample.interval_ms || 33.33) : shiftMax;
-    const loR = Math.min(lo, hi), hiR = Math.max(lo, hi);
+    const itvl = primarySample.interval_ms || 33.33;
+    const topts = v => shiftUnit === 'ms' ? Math.round(v / itvl) : Math.round(v);
     const shifted = {};
     Object.entries(batchStates).forEach(([id, state]) => {
       const smpl = batchSamples.find(s => s.id === id);
       if (!smpl || !state.cuts.length) { shifted[id] = state; return; }
+      const lo = topts(Math.min(shiftLo, shiftHi));
+      const hi = topts(Math.max(shiftLo, shiftHi));
       const shiftedCuts = state.cuts.map(c => {
-        const s = Math.round(loR + Math.random() * (hiR - loR));
+        const s = Math.round(lo + Math.random() * (hi - lo));
         return Math.max(1, Math.min(smpl.values.length - 1, c + s));
       }).sort((a, b) => a - b);
       shifted[id] = { ...state, cuts: shiftedCuts };
     });
     return shifted;
-  }, [isBatch, enableShift, batchStates, batchSamples, shiftMin, shiftMax, shiftUnit, primarySample.interval_ms]);
+  }, [isBatch, enableShift, batchStates, batchSamples,
+      shiftLo, shiftHi, shiftUnit, primarySample.interval_ms]);
 
-  const padInfo = enablePad ? { min: padMin, max: padMax, unit: padUnit, random: padRandom } : null;
+  const padInfo = enablePad ? {
+    min: padLo,   // lo = guaranteed minimum pad
+    max: padHi,   // hi = maximum possible pad (random upper bound)
+    unit: padUnit,
+    random: padRandom,
+  } : null;
 
   return (
     <div 
@@ -699,112 +783,94 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           )}
 
           {/* ── Random Shift ── */}
-          {
-            <div style={{ background: '#050c1a', border: `1px solid ${enableShift ? '#f59e0b55' : '#1e293b'}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enableShift ? 10 : 0 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={enableShift} onChange={e => setEnableShift(e.target.checked)} style={{ accentColor: '#f59e0b', width: 13, height: 13 }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: enableShift ? '#fbbf24' : '#64748b' }}>Random Shift</span>
-                </label>
-                {enableShift && (
-                  <span style={{ fontSize: 9, color: '#64748b' }}>
-                    Randomly shifts each cut boundary — preview shows a sample result
-                  </span>
-                )}
-                {enableShift && (
-                  <button onClick={generateShiftPreview} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#451a03', border: '1px solid #f59e0b55', color: '#fbbf24', borderRadius: 4, padding: '2px 8px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto' }}>
-                    <Shuffle size={10} /> Resample preview
-                  </button>
-                )}
-              </div>
+          <div style={{ background: '#050c1a', border: `1px solid ${enableShift ? '#f59e0b55' : '#1e293b'}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enableShift ? 14 : 0 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <input type="checkbox" checked={enableShift} onChange={e => setEnableShift(e.target.checked)} style={{ accentColor: '#f59e0b', width: 13, height: 13 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: enableShift ? '#fbbf24' : '#64748b' }}>Random Shift</span>
+              </label>
+              {enableShift && <span style={{ fontSize: 9, color: '#64748b' }}>Each cut boundary shifts by a random amount from this range</span>}
               {enableShift && (
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                  <div>
-                    <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Min shift</span>
-                    <input type="number" value={shiftMin} onChange={e => setShiftMin(Number(e.target.value))}
-                      style={{ ...SI, width: 70 }} />
-                  </div>
-                  <div>
-                    <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Max shift</span>
-                    <input type="number" value={shiftMax} onChange={e => setShiftMax(Number(e.target.value))}
-                      style={{ ...SI, width: 70 }} />
-                  </div>
-                  <div>
-                    <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Unit</span>
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {['pts', 'ms'].map(u => (
-                        <button key={u} onClick={() => setShiftUnit(u)} style={{
-                          background: shiftUnit === u ? '#451a03' : '#060d1a',
-                          border: `1px solid ${shiftUnit === u ? '#f59e0b' : '#1e293b'}`,
-                          color: shiftUnit === u ? '#fbbf24' : '#64748b',
-                          borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
-                        }}>{u}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 10, color: '#64748b', alignSelf: 'center' }}>
-                    ≈ ±{Math.max(Math.abs(shiftMin), Math.abs(shiftMax))}{shiftUnit}
-                    {shiftUnit === 'pts' && ` (${formatMs(Math.max(Math.abs(shiftMin), Math.abs(shiftMax)) * interval_ms)})`}
-                  </span>
-                </div>
+                <button onClick={generateShiftPreview} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#451a03', border: '1px solid #f59e0b55', color: '#fbbf24', borderRadius: 4, padding: '2px 8px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto' }}>
+                  <Shuffle size={10} /> Resample preview
+                </button>
               )}
             </div>
-          }
+            {enableShift && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10, color: '#64748b', minWidth: 32 }}>Unit</span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {['pts', 'ms'].map(u => (
+                      <button key={u} onClick={() => setShiftUnit(u)} style={{
+                        background: shiftUnit === u ? '#451a03' : '#060d1a',
+                        border: `1px solid ${shiftUnit === u ? '#f59e0b' : '#1e293b'}`,
+                        color: shiftUnit === u ? '#fbbf24' : '#64748b',
+                        borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
+                      }}>{u}</button>
+                    ))}
+                  </div>
+                </div>
+                <RangePair
+                  lo={shiftLo} hi={shiftHi}
+                  onLoChange={setShiftLo} onHiChange={setShiftHi}
+                  unit={shiftUnit} interval_ms={interval_ms}
+                  color="#f59e0b" allowNegative
+                  SI={SI}
+                />
+                <div style={{ fontSize: 9, color: '#64748b', background: '#451a0318', border: '1px solid #f59e0b22', borderRadius: 5, padding: '5px 10px' }}>
+                  Per cut: shift &isin; [{shiftLo}, {shiftHi}] {shiftUnit}
+                  {shiftUnit === 'pts' && <> &nbsp;&middot;&nbsp; {formatMs(Math.abs(shiftLo) * interval_ms)} → {formatMs(Math.abs(shiftHi) * interval_ms)}</>}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* ── Padding ── */}
-          {
-            <div style={{ background: '#050c1a', border: `1px solid ${enablePad ? '#a78bfa55' : '#1e293b'}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enablePad ? 10 : 0 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={enablePad} onChange={e => setEnablePad(e.target.checked)} style={{ accentColor: '#a78bfa', width: 13, height: 13 }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: enablePad ? '#a78bfa' : '#64748b' }}>Padding</span>
-                </label>
-                {enablePad && (
-                  <span style={{ fontSize: 9, color: '#64748b' }}>
-                    Extends each kept segment at both ends · shown as amber zones
-                  </span>
-                )}
-              </div>
+          <div style={{ background: '#050c1a', border: `1px solid ${enablePad ? '#a78bfa55' : '#1e293b'}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: enablePad ? 14 : 0 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <input type="checkbox" checked={enablePad} onChange={e => setEnablePad(e.target.checked)} style={{ accentColor: '#a78bfa', width: 13, height: 13 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: enablePad ? '#a78bfa' : '#64748b' }}>Padding</span>
+              </label>
+              {enablePad && <span style={{ fontSize: 9, color: '#64748b' }}>Extends each kept segment at both ends &middot; amber zones in preview</span>}
               {enablePad && (
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                  <div>
-                    <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>{padRandom ? 'Min pad' : 'Pad size'}</span>
-                    <input type="number" value={padMin} onChange={e => setPadMin(Number(e.target.value))}
-                      style={{ ...SI, width: 70 }} />
-                  </div>
-                  {padRandom && (
-                    <div>
-                      <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Max pad</span>
-                      <input type="number" value={padMax} onChange={e => setPadMax(Number(e.target.value))}
-                        style={{ ...SI, width: 70 }} />
-                    </div>
-                  )}
-                  <div>
-                    <span style={{ fontSize: 10, color: '#64748b', display: 'block', marginBottom: 3 }}>Unit</span>
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {['pts', 'ms'].map(u => (
-                        <button key={u} onClick={() => setPadUnit(u)} style={{
-                          background: padUnit === u ? '#1a0a33' : '#060d1a',
-                          border: `1px solid ${padUnit === u ? '#a78bfa' : '#1e293b'}`,
-                          color: padUnit === u ? '#a78bfa' : '#64748b',
-                          borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
-                        }}>{u}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10, color: padRandom ? '#a78bfa' : '#64748b', userSelect: 'none' }}>
-                    <input type="checkbox" checked={padRandom} onChange={e => setPadRandom(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
-                    Random
-                  </label>
-                  <span style={{ fontSize: 10, color: '#64748b', alignSelf: 'center' }}>
-                    ≈ {padRandom ? `${padMin}–${padMax}` : padMin}{padUnit}
-                    {padUnit === 'pts' && ` (${formatMs(padMin * interval_ms)})`}
-                    {' · shown as amber in preview'}
-                  </span>
-                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10, color: padRandom ? '#a78bfa' : '#64748b', userSelect: 'none', marginLeft: 'auto' }}>
+                  <input type="checkbox" checked={padRandom} onChange={e => setPadRandom(e.target.checked)} style={{ accentColor: '#a78bfa' }} />
+                  Random in range
+                </label>
               )}
             </div>
-          }
+            {enablePad && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10, color: '#64748b', minWidth: 32 }}>Unit</span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {['pts', 'ms'].map(u => (
+                      <button key={u} onClick={() => setPadUnit(u)} style={{
+                        background: padUnit === u ? '#1a0a33' : '#060d1a',
+                        border: `1px solid ${padUnit === u ? '#a78bfa' : '#1e293b'}`,
+                        color: padUnit === u ? '#a78bfa' : '#64748b',
+                        borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit',
+                      }}>{u}</button>
+                    ))}
+                  </div>
+                </div>
+                <RangePair
+                  lo={padLo} hi={padHi}
+                  onLoChange={setPadLo} onHiChange={setPadHi}
+                  unit={padUnit} interval_ms={interval_ms}
+                  color="#a78bfa"
+                  SI={SI}
+                />
+                <div style={{ fontSize: 9, color: '#64748b', background: '#1a0a3318', border: '1px solid #a78bfa22', borderRadius: 5, padding: '5px 10px' }}>
+                  {padRandom
+                    ? <>Per segment: pad &isin; [{padLo}, {padHi}] {padUnit} (random){padUnit === 'pts' ? <> &nbsp;&middot;&nbsp; {formatMs(padLo * interval_ms)} → {formatMs(padHi * interval_ms)}</> : null}</>
+                    : <>Fixed pad: {padLo} {padUnit}{padUnit === 'pts' ? ` · ${formatMs(padLo * interval_ms)}` : ''} added to each end</>}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Sensor vis toggles */}
           {!isBatch && (
@@ -947,7 +1013,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               {/* Shift indicator under canvas */}
               {enableShift && shiftPreview.length > 0 && (
                 <div style={{ marginTop: 5, padding: '5px 10px', background: '#451a0322', border: '1px solid #f59e0b33', borderRadius: 5, fontSize: 9, color: '#fbbf24' }}>
-                  Preview shows a simulated random shift — actual shifts will differ per split. Cuts shifted by [{shiftMin},{shiftMax}]{shiftUnit}.
+                  Preview shows a simulated random shift — actual shifts will differ per split. [{shiftLo},{shiftHi}]{shiftUnit}.
                 </div>
               )}
 
@@ -1010,7 +1076,7 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
             <BatchGraphs 
               samples={batchSamples} batchStates={batchPreviewStates} 
               sensors={sensors} visSensors={visSensors}
-              enablePad={enablePad} padMin={padMin} padMax={padMax} padUnit={padUnit} padRandom={padRandom}
+              padInfo={padInfo}
               onToggleRemove={handleBatchToggleRemove}
               onCombineLeft={handleBatchCombineLeft}
               onCombineRight={handleBatchCombineRight}
@@ -1025,8 +1091,8 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
               {!isBatch && <>
                 <span style={{ color: '#34d399' }}>{keptSegs.length} segments kept</span>
                 {removedSegs.size > 0 && <span style={{ color: '#f87171' }}>· {removedSegs.size} removed</span>}
-                {enableShift && <span style={{ color: '#fbbf24' }}>· shift ±{Math.max(Math.abs(shiftMin), Math.abs(shiftMax))}{shiftUnit}</span>}
-                {enablePad && <span style={{ color: '#a78bfa' }}>· pad {padRandom ? `${padMin}–${padMax}` : padMin}{padUnit}</span>}
+                {enableShift && <span style={{ color: '#fbbf24' }}>· shift [{shiftLo},{shiftHi}]{shiftUnit}</span>}
+                {enablePad && <span style={{ color: '#a78bfa' }}>· pad {padRandom ? `[${padLo},${padHi}] random` : `${padLo}–${padHi}`}{padUnit}</span>}
               </>}
               {isBatch && <span style={{ color: '#34d399' }}>{totalKept} total segments</span>}
             </div>

@@ -1,4 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
+import { LayoutDashboard, Layers, GitGraph } from 'lucide-react';
 import { SENSOR_COLORS } from '../utils/colors';
 
 // ─── Sensor group definitions ─────────────────────────────────────────────
@@ -313,9 +314,9 @@ function ValueLegend({ allValues, sensors, vis }) {
 
 // ─── Main WaveformViewer ──────────────────────────────────────────────────
 const DISPLAY_MODES = [
-  { key: 'combined', label: '📈 Combined' },
-  { key: 'grouped',  label: '🗂 By Group'  },
-  { key: 'overlay',  label: '⊕ Overlay'   },
+  { key: 'combined', label: 'Combined', icon: <LayoutDashboard size={11} /> },
+  { key: 'grouped',  label: 'By Group',  icon: <Layers size={11} /> },
+  { key: 'overlay',  label: 'Overlay',   icon: <GitGraph size={11} /> },
 ];
 
 export default function WaveformViewer({ samples, sensors }) {
@@ -352,11 +353,15 @@ export default function WaveformViewer({ samples, sensors }) {
         <div style={{ display: 'flex', gap: 3 }}>
           {DISPLAY_MODES.map(m => (
             <button key={m.key} onClick={() => setDisplayMode(m.key)} style={{
+              display: 'flex', alignItems: 'center', gap: 5,
               background: displayMode === m.key ? '#0d2040' : '#080f1e',
               border: `1px solid ${displayMode === m.key ? '#3b82f6' : '#1e293b'}`,
               color: displayMode === m.key ? '#60a5fa' : '#475569',
-              borderRadius: 5, padding: '3px 10px', fontSize: 10, cursor: 'pointer', fontFamily: 'monospace',
-            }}>{m.label}</button>
+              borderRadius: 5, padding: '4px 10px', fontSize: 10, cursor: 'pointer', fontFamily: 'monospace',
+            }}>
+              {m.icon}
+              {m.label}
+            </button>
           ))}
         </div>
         <span style={{ fontSize: 9, color: '#334155' }}>

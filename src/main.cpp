@@ -74,6 +74,11 @@ static uint32_t  lock_prev_idle_ms = UINT32_MAX; // idle_ms from previous loop i
 static uint32_t  lock_last_tap_ms  = 0;           // millis() of most recent tap while locked
 static int       lock_tap_count    = 0;            // consecutive taps within window
 
+// Forward declaration — defined further below, used in on_mode_change
+#ifdef SERIAL_COMMAND
+static void stream_serial_cb(const SensorData &d);
+#endif
+
 static bool prediction_motion_detected(const ProcessedSensorData &pd) {
     if (!infer_motion_seeded) {
         for (int i = 0; i < NUM_FLEX_SENSORS; i++) prev_flex_pct[i] = pd.flex_pct[i];
@@ -120,8 +125,18 @@ static void on_mode_change(AppMode m) {
     // Menu & Settings don't need live sensor data.
     bool need_sensors = (m == MODE_TRAIN || m == MODE_PREDICT_LOCAL
                       || m == MODE_PREDICT_WEB
+#ifdef SERIAL_COMMAND
+                      || m == MODE_DATA_COLLECT
+#endif
                       || m == MODE_TEST);
     sensors_set_active(need_sensors);
+
+#ifdef SERIAL_COMMAND
+    // Enable/disable 30 Hz serial streaming callback on Core 0.
+    // Only active in modes that pipe data to Edge Impulse / Web Serial.
+    bool need_stream = (m == MODE_TRAIN || m == MODE_DATA_COLLECT);
+    sensors_set_stream_cb(need_stream ? stream_serial_cb : NULL);
+#endif
 
     // Start / stop web server as needed
     if (m == MODE_PREDICT_WEB && !web_server_is_running()) {
@@ -236,7 +251,103 @@ static void on_test_oled() {
     // Restore after a short delay (non-blocking via flag)
 }
 
+#ifdef SERIAL_COMMAND
+// ════════════════════════════════════════════════════════════════════
+//  Configurable streaming frequency  (can be changed via serial cmd)
+// ════════════════════════════════════════════════════════════════════
+static uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;  // default ~30 Hz
+
+// ════════════════════════════════════════════════════════════════════
+//  Serial streaming — driven from Core 0 sensor task at true 30 Hz
+// ════════════════════════════════════════════════════════════════════
+// This callback is invoked at 30 Hz directly from the sensor task on
+// Core 0 (via sensors_set_stream_cb).  Keeping serial output on the
+// same core as the sensor read avoids jitter from LVGL rendering on
+// Core 1, which was the cause of the reported 14-19 Hz effective rate.
+static void stream_serial_cb(const SensorData &d) {
+    sensor_module_stream_raw_csv(d);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Serial command handler (for Web Serial data collection app)
+// ════════════════════════════════════════════════════════════════════
+static char serial_cmd_buf[64];
+static int  serial_cmd_idx = 0;
+
+static void handle_serial_commands() {
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (serial_cmd_idx > 0) {
+                serial_cmd_buf[serial_cmd_idx] = '\0';
+
+                // Trim leading/trailing whitespace
+                char *cmd = serial_cmd_buf;
+                while (*cmd == ' ' || *cmd == '\t') cmd++;
+                int len = strlen(cmd);
+                while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\t')) len--;
+                cmd[len] = '\0';
+
+                if (strcmp(cmd, "cal_dump") == 0) {
+                    sensor_module_dump_calibration_json();
+                } else if (strcmp(cmd, "data_start") == 0) {
+                    current_mode = MODE_DATA_COLLECT;
+                    sensors_set_active(true);
+                    sensors_set_stream_cb(stream_serial_cb);
+                    Serial.println("OK:data_start");
+                } else if (strcmp(cmd, "data_stop") == 0) {
+                    current_mode = MODE_MENU;
+                    sensors_set_stream_cb(NULL);
+                    Serial.println("OK:data_stop");
+                } else if (strncmp(cmd, "set_freq=", 9) == 0) {
+                    int hz = atoi(cmd + 9);
+                    if (hz >= 1 && hz <= 100) {
+                        stream_interval_ms = 1000 / hz;
+                        sensors_set_rate_hz(hz);
+                        Serial.printf("OK:freq=%d\n", hz);
+                    } else {
+                        Serial.println("ERR:freq out of range (1-100)");
+                    }
+                } else if (strcmp(cmd, "cal_start") == 0) {
+                    // Remote calibration: phase 0 (flat hand)
+                    sensors_set_active(true);
+                    Serial.println("OK:cal_phase=0,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FLAT_HAND, nullptr);
+                    Serial.println("OK:cal_phase=0,done");
+                } else if (strcmp(cmd, "cal_phase1") == 0) {
+                    Serial.println("OK:cal_phase=1,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FIST_THUMB_UP, nullptr);
+                    Serial.println("OK:cal_phase=1,done");
+                } else if (strcmp(cmd, "cal_phase2") == 0) {
+                    Serial.println("OK:cal_phase=2,sampling");
+                    sensor_module_calibrate_phase(CALIB_PHASE_FIST_THUMB_IN, nullptr);
+                    Serial.println("OK:cal_phase=2,done");
+                } else if (strcmp(cmd, "cal_finalize") == 0) {
+                    bool ok = sensor_module_calibrate_finalize();
+                    if (ok) {
+                        sensor_module_save_calibration();
+                        Serial.println("OK:cal_finalized");
+                        sensor_module_dump_calibration_json();
+                    } else {
+                        Serial.println("ERR:cal_finalize_failed");
+                    }
+                } else if (strcmp(cmd, "ping") == 0) {
+                    Serial.println("OK:pong");
+                } else if (strcmp(cmd, "info") == 0) {
+                    int hz = (stream_interval_ms > 0) ? (1000 / stream_interval_ms) : 30;
+                    Serial.printf("OK:SignGlove,freq=%d,features=18,cal=%d\n",
+                                  hz, sensor_module_is_calibrated() ? 1 : 0);
+                }
+                serial_cmd_idx = 0;
+            }
+        } else if (serial_cmd_idx < (int)sizeof(serial_cmd_buf) - 1) {
+            serial_cmd_buf[serial_cmd_idx++] = c;
+        }
+    }
+}
+#else
 static const uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;
+#endif  // SERIAL_COMMAND
 
 // ════════════════════════════════════════════════════════════════════
 //  Gesture classification via Edge Impulse model
@@ -319,8 +430,12 @@ static void classify_gesture() {
     if (strcmp(stable_pred_label, "---") == 0) {
         strncpy(gesture_text, "---", sizeof(gesture_text));
     } else {
-        // Keep UI prediction responsive even while audio is speaking.
-        strncpy(gesture_text, stable_pred_label, sizeof(gesture_text));
+        // Only update the display text if audio is NOT playing — prevents
+        // the label from flickering to a new gesture mid-speech.
+        if (!audio_is_playing()) {
+            strncpy(gesture_text, stable_pred_label, sizeof(gesture_text));
+        }
+        // Still allow non-sign → idle transitions even during playback
     }
 }
 
@@ -577,10 +692,16 @@ void loop() {
         }
     }
 
+#ifdef SERIAL_COMMAND
+    // ── Handle serial commands from Web Serial data collection app ──
+    handle_serial_commands();
+#endif
+
     // ── Mode-specific logic ────────────────────────────────────────
     switch (current_mode) {
 
     case MODE_TRAIN:
+        // Serial streaming handled by Core 0 callback (stream_serial_cb)
         {
             // Count serial frames for the GUI (approximate — incremented by lv frame period)
             static uint32_t last_cnt_check = 0;
@@ -597,7 +718,7 @@ void loop() {
         break;
 
     case MODE_PREDICT_LOCAL:
-        if (!lock_active && now - last_display >= PREDICT_UPDATE_INTERVAL_MS) {
+        if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             if (gui_local_show_sensors())
                 gui_local_sensor_update(processed_data);
@@ -650,7 +771,7 @@ void loop() {
             web_server_update(sensor_data, gesture_text);
             gui_web_set_connected(web_server_num_clients() > 0);
         }
-        if (!lock_active && now - last_display >= PREDICT_UPDATE_INTERVAL_MS) {
+        if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             gui_set_gesture(gesture_text);
             gui_set_predict_confidence(processed_data.prediction_confidence);
@@ -658,7 +779,7 @@ void loop() {
         break;
 
     case MODE_DATA_COLLECT:
-        // Reserved mode (serial data-collect path removed)
+        // Serial streaming handled by Core 0 callback (stream_serial_cb)
         break;
 
     case MODE_SETTINGS:

@@ -147,7 +147,7 @@ export default function WaveformCutter({
       ctx.fillStyle = '#38bdf8';
       ctx.font = '9px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('✂️ Split', mouseHoverX, 40);
+      ctx.fillText('[ split ]', mouseHoverX, 40);
     }
   }, [values, sensors, cutPoints, activeSensors, dragging, hover, mouseHoverX, interval_ms, N]);
 

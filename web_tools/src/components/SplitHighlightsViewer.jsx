@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutDashboard, Layers, GitGraph } from 'lucide-react';
 import { SENSOR_COLORS } from '../utils/colors';
 import { groupSensorsByDiscriminant } from '../utils/flatDetector';
 import { getSensorGroup } from './WaveformViewer';
 
 const MODES = [
-  { key: 'combined', label: '📈 Combined' },
-  { key: 'grouped', label: '🗂 By Group' },
-  { key: 'overlay', label: '⊕ Overlay' },
+  { key: 'combined', label: 'Combined', icon: <LayoutDashboard size={10} /> },
+  { key: 'grouped',  label: 'By Group',  icon: <Layers size={10} /> },
+  { key: 'overlay',  label: 'Overlay',   icon: <GitGraph size={10} /> },
 ];
 
 export default function SplitHighlightsViewer({
@@ -242,16 +243,18 @@ export default function SplitHighlightsViewer({
               key={m.key}
               onClick={() => setMode(m.key)}
               style={{
+                display: 'flex', alignItems: 'center', gap: 4,
                 background: mode === m.key ? '#0d2040' : '#060d1a',
                 border: `1px solid ${mode === m.key ? '#3b82f6' : '#1e293b'}`,
                 color: mode === m.key ? '#60a5fa' : '#64748b',
                 borderRadius: 4,
-                padding: '2px 7px',
+                padding: '3px 8px',
                 fontSize: 9,
                 cursor: 'pointer',
                 fontFamily: 'inherit',
               }}
             >
+              {m.icon}
               {m.label}
             </button>
           ))}

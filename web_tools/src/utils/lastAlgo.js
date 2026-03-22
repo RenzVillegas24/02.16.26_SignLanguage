@@ -13,22 +13,24 @@ export const lastAlgoStore = {
   threshold: 0.25,
   stdMult: 1.5,
   sensitivity: 0.25,
-  minGap: null,      // null → use per-sample default
+  minGap: null,
   numParts: 4,
 
   // Equal parts
   equalParts: 4,
 
-  // Shift
+  // Random shift — single [lo, hi] range; each cut gets value sampled from this range
   shiftEnabled: false,
-  shiftMin: -10,
-  shiftMax: 10,
+  shiftLo: -10,     // minimum shift (can be negative)
+  shiftHi: 10,      // maximum shift
   shiftUnit: 'pts',
 
-  // Padding
+  // Padding — single [lo, hi] range
+  // Fixed mode: padLo is used as constant pad
+  // Random mode: pad per segment sampled from [padLo, padHi]
   padEnabled: false,
-  padMin: 5,
-  padMax: 5,
+  padLo: 3,
+  padHi: 10,
   padUnit: 'pts',
   padRandom: false,
 
@@ -36,6 +38,7 @@ export const lastAlgoStore = {
   flatWindowSize: 20,
   flatThreshold: 1.5,
   flatMinFlatPts: 15,
-  flatSelectedIds: [],    // array of sample IDs (serializable)
-  flatSelectedCh: null,   // null = use auto default
+  flatSelectedIds: [],
+  flatSelectedCh: null,
+  flatAutoDisable: false,
 };

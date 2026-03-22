@@ -4,7 +4,7 @@ import {
   Save, FolderOpen, Package, Upload, FileJson,
   Scissors, GitMerge, Fingerprint, Download,
   List, LayoutGrid, Zap, ChevronRight,
-  CheckSquare, Square, Trash2, Filter,
+  CheckSquare, Square, Trash2, Filter, Search, X,
 } from 'lucide-react';
 import { uid, syncUid, parseEIJson, parseLabelsFile, buildEIJson, downloadJSON, simpleHash, formatMs } from './utils/parse';
 import { SENSOR_COLORS, CATEGORY_COLORS } from './utils/colors';
@@ -109,6 +109,7 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(null); // null | { label, sub, count, total }
   const [sidebarViewMode, setSidebarViewMode] = useState('list'); // 'list' | 'grid'
+  const [sampleSearch, setSampleSearch] = useState('');
   const [splitHighlightsByBase, setSplitHighlightsByBase] = useState({});
   const [splitHighlightSensors, setSplitHighlightSensors] = useState([]);
   const [visibleSampleTypes, setVisibleSampleTypes] = useState(new Set(['unmodified', 'segment']));
@@ -148,17 +149,26 @@ export default function App() {
     return 'unmodified';
   }, [splitBaseIdSet]);
 
-  const filteredSamples = useMemo(() => samples.filter(s => {
-    if (!visibleSampleTypes.has(getSampleType(s))) return false;
-    if (filterLabel !== 'all' && s.label !== filterLabel) return false;
-    if (filterStatus === 'enabled' && !s.enabled) return false;
-    if (filterStatus === 'disabled' && s.enabled) return false;
-    if (filterCategory !== 'all' && s.category !== filterCategory) return false;
-    const range = maxDur - minDur || 1;
-    const pct = ((s.duration_ms - minDur) / range) * 100;
-    if (pct < timeRange[0] || pct > timeRange[1]) return false;
-    return true;
-  }), [samples, visibleSampleTypes, getSampleType, filterLabel, filterStatus, filterCategory, timeRange, minDur, maxDur]);
+  const filteredSamples = useMemo(() => {
+    const q = sampleSearch.trim().toLowerCase();
+    return samples.filter(s => {
+      if (!visibleSampleTypes.has(getSampleType(s))) return false;
+      if (filterLabel !== 'all' && s.label !== filterLabel) return false;
+      if (filterStatus === 'enabled' && !s.enabled) return false;
+      if (filterStatus === 'disabled' && s.enabled) return false;
+      if (filterCategory !== 'all' && s.category !== filterCategory) return false;
+      const range = maxDur - minDur || 1;
+      const pct = ((s.duration_ms - minDur) / range) * 100;
+      if (pct < timeRange[0] || pct > timeRange[1]) return false;
+      if (q) {
+        const label = (s.label || '').toLowerCase();
+        const name  = (s.sampleName || '').toLowerCase();
+        const file  = (s.filename || '').toLowerCase();
+        if (!label.includes(q) && !name.includes(q) && !file.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [samples, visibleSampleTypes, getSampleType, filterLabel, filterStatus, filterCategory, timeRange, minDur, maxDur, sampleSearch]);
 
   const viewSamples = useMemo(() => {
     const ids = new Set(selectedIds);
@@ -322,6 +332,77 @@ export default function App() {
       if (activeId === id) setActiveId(null);
     }
   }, [samples, activeId, showToast]);
+
+  // Batch delete — handles segments properly in one atomic pass:
+  // For each deleted ID:
+  //   • Plain sample → just remove
+  //   • Segment → remove; if ALL siblings in that group are also being deleted
+  //     (or become the last one), also restore the source and clean highlights
+  const delBatch = useCallback((ids) => {
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+
+    // Snapshot current state for decisions
+    const snap = samples;
+
+    // Gather all affected split groups
+    const affectedGroups = new Map(); // baseId → { allSiblings, deletedSiblings }
+    snap.forEach(s => {
+      if (!s.splitBaseId) return;
+      if (!affectedGroups.has(s.splitBaseId)) {
+        affectedGroups.set(s.splitBaseId, { allSiblings: [], deletedSiblings: [] });
+      }
+      const g = affectedGroups.get(s.splitBaseId);
+      g.allSiblings.push(s.id);
+      if (idSet.has(s.id)) g.deletedSiblings.push(s.id);
+    });
+
+    // Determine which source samples to restore (all siblings being deleted)
+    const sourcesToRestore = new Set();
+    const highlightsToClean = new Set();
+    const highlightsToTrim = new Map(); // baseId → [keepSampleIds]
+
+    affectedGroups.forEach((g, baseId) => {
+      const remaining = g.allSiblings.filter(sid => !idSet.has(sid));
+      if (remaining.length === 0 && g.deletedSiblings.length > 0) {
+        sourcesToRestore.add(baseId);
+        highlightsToClean.add(baseId);
+      } else if (g.deletedSiblings.length > 0) {
+        highlightsToTrim.set(baseId, remaining);
+      }
+    });
+
+    setSamples(prev =>
+      prev
+        .filter(s => !idSet.has(s.id))
+        .map(s => sourcesToRestore.has(s.id) ? { ...s, hiddenAfterSplit: false } : s)
+    );
+
+    setSplitHighlightsByBase(prev => {
+      const next = { ...prev };
+      highlightsToClean.forEach(baseId => { delete next[baseId]; });
+      highlightsToTrim.forEach((keepIds, baseId) => {
+        if (next[baseId]) {
+          const keepSet = new Set(keepIds);
+          next[baseId] = {
+            ...next[baseId],
+            segments: next[baseId].segments.filter(seg => keepSet.has(seg.sampleId)),
+          };
+        }
+      });
+      return next;
+    });
+
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      ids.forEach(id => n.delete(id));
+      return n;
+    });
+
+    if (idSet.has(activeId)) {
+      setActiveId(null);
+    }
+  }, [samples, activeId]);
   const rename = (id, label) => setSamples(p => p.map(s => s.id === id ? { ...s, label } : s));
   const toggleEnabled = (id) => setSamples(p => p.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s));
   const toggleCategory = (id) => setSamples(p => p.map(s => s.id === id ? { ...s, category: s.category === 'testing' ? 'training' : 'testing' } : s));
@@ -1125,6 +1206,41 @@ export default function App() {
             )}
           </div>
 
+          {/* Search */}
+          <div style={{ padding: '0 8px 6px' }}>
+            <div style={{ position: 'relative' }}>
+              <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex', alignItems: 'center' }}>
+                <Search size={11} color="#334155" />
+              </div>
+              <input
+                value={sampleSearch}
+                onChange={e => setSampleSearch(e.target.value)}
+                placeholder="Search label, name, filename…"
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  background: '#080f1e', color: '#f1f5f9',
+                  border: `1px solid ${sampleSearch ? '#3b82f6' : '#1a2540'}`,
+                  borderRadius: 6, padding: '5px 24px 5px 26px',
+                  fontSize: 10, fontFamily: 'inherit', outline: 'none',
+                  transition: 'border-color 0.15s',
+                }}
+              />
+              {sampleSearch && (
+                <button
+                  onClick={() => setSampleSearch('')}
+                  style={{
+                    position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'none', border: 'none', color: '#475569',
+                    cursor: 'pointer', padding: 2, borderRadius: 3,
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Actions + view mode toggle */}
           <div style={{ padding: '0 8px 5px' }}>
             <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginBottom: 4 }}>
@@ -1137,19 +1253,33 @@ export default function App() {
               <SideBtn icon={<Upload size={11} />} label="Export" onClick={exportSelected}
                 disabled={!selectedIds.size} color="#34d399" bg="#0a2018" />
             </div>
-            {selectedIds.size >= 2 && (
-              <div style={{ marginBottom: 4 }}>
+            <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
+              {selectedIds.size >= 2 && (
                 <SideBtn
                   icon={<Scissors size={11} />}
                   label={`Batch Split (${selectedIds.size})`}
                   onClick={openBatchSplit}
                   color="#fbbf24" bg="#1a1008" fullWidth
                 />
-              </div>
-            )}
+              )}
+              {selectedIds.size > 0 && (
+                <SideBtn
+                  icon={<Trash2 size={11} />}
+                  label={`Delete (${selectedIds.size})`}
+                  onClick={() => {
+                    const ids = [...selectedIds];
+                    delBatch(ids);
+                    showToast(`Deleted ${ids.length} sample${ids.length !== 1 ? 's' : ''}`, 'info');
+                  }}
+                  color="#f87171" bg="#1a0808" fullWidth={selectedIds.size < 2}
+                />
+              )}
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 9, color: '#1e3a5f', fontFamily: 'monospace' }}>
-                {filteredSamples.length}/{samples.length} · {selectedIds.size} sel
+                {filteredSamples.length}/{samples.length}
+                {sampleSearch && <span style={{ color: '#3b82f6' }}> filtered</span>}
+                {selectedIds.size > 0 && <span style={{ color: '#60a5fa' }}> · {selectedIds.size} sel</span>}
               </span>
               <div style={{ display: 'flex', gap: 2 }}>
                 <button onClick={() => setSidebarViewMode('list')} title="List view"

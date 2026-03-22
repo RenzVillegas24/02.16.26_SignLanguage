@@ -38,6 +38,9 @@ static volatile bool s_active     = true;       // false → task idles (menu mo
 static SensorData    s_shared     = {};         // latest data (written by task, read by main)
 static portMUX_TYPE  s_spin       = portMUX_INITIALIZER_UNLOCKED;
 
+// Optional 30 Hz streaming callback (invoked from Core 0 sensor task)
+static volatile SensorStreamCallback s_stream_cb = NULL;
+
 // Configurable task period (default from SENSOR_READ_INTERVAL_MS)
 static volatile uint32_t s_period_ms = SENSOR_READ_INTERVAL_MS;
 
@@ -211,6 +214,12 @@ static void sensor_task_fn(void *) {
         s_shared = d;
         taskEXIT_CRITICAL(&s_spin);
 
+        // ── Invoke streaming callback (serial CSV output etc.) ──
+        // Runs on Core 0 at a guaranteed 30 Hz, fully decoupled from
+        // LVGL rendering on Core 1.
+        SensorStreamCallback cb = s_stream_cb;
+        if (cb) cb(d);
+
         // Precise 30 Hz pacing — sleeps exactly the remaining time in the
         // 33 ms period.  If the cycle overruns, the next iteration starts
         // immediately (no drift accumulation).
@@ -264,6 +273,10 @@ bool sensors_ads_available() { return ads_ok; }
 
 void sensors_set_active(bool active) {
     s_active = active;
+}
+
+void sensors_set_stream_cb(SensorStreamCallback cb) {
+    s_stream_cb = cb;
 }
 
 void sensors_set_rate_hz(int hz) {

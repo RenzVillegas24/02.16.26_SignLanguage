@@ -137,14 +137,34 @@ function CombinedCanvas({ values, sensors, interval_ms, cutPoints, removedSegmen
       const removed = removedSegments.has(seg.idx);
       const isHov   = hovered === seg.idx;
 
-      // Padding zones
+      // Padding zones — show guaranteed min pad (solid amber) + max extension (lighter)
       if (!removed && padding) {
-        const avgPad = (Number(padding.min) + Number(padding.max)) / 2;
-        const padPts = padding.unit === 'ms' ? avgPad / interval_ms : avgPad;
-        const padW = Math.abs((padPts / N) * (W - LPAD));
-        ctx.fillStyle = padPts >= 0 ? '#f59e0b18' : '#ef444430';
-        ctx.fillRect(x1, 0, padW, H - 18);
-        ctx.fillRect(x2 - padW, 0, padW, H - 18);
+        const toPts = v => padding.unit === 'ms' ? v / interval_ms : v;
+        const padMin = Math.max(0, toPts(Math.min(Number(padding.min), Number(padding.max))));
+        const padMax = Math.max(0, toPts(Math.max(Number(padding.min), Number(padding.max))));
+        const wMin = (padMin / N) * (W - LPAD);
+        const wMax = (padMax / N) * (W - LPAD);
+        // Max extent (lighter — possible range)
+        if (wMax > wMin) {
+          ctx.fillStyle = '#f59e0b0c';
+          ctx.fillRect(x1 - wMax, 0, wMax, H - 18);
+          ctx.fillRect(x2,        0, wMax, H - 18);
+        }
+        // Min guaranteed zone (more opaque)
+        ctx.fillStyle = '#f59e0b28';
+        ctx.fillRect(x1 - wMin, 0, wMin, H - 18);
+        ctx.fillRect(x2,        0, wMin, H - 18);
+        // Dashed outline of max extent
+        if (wMax > 0) {
+          ctx.strokeStyle = '#f59e0b55'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+          ctx.beginPath();
+          ctx.rect(x1 - wMax + 0.5, 1, wMax - 1, H - 20);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.rect(x2 + 0.5, 1, wMax - 1, H - 20);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
 
       // Background
