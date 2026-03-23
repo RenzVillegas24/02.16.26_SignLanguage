@@ -55,6 +55,7 @@ static char      stable_pred_label[32] = "---";
 static float     stable_pred_conf = 0.0f;
 static char      pending_pred_label[32] = "---";
 static uint8_t   pending_pred_count = 0;
+static uint8_t   uncertain_pred_count = 0;
 static char      last_spoken_label[32] = "";  // track last spoken label to avoid repeat
 
 // CPU usage tracking
@@ -159,6 +160,7 @@ static void on_mode_change(AppMode m) {
     strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
     strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
     pending_pred_count = 0;
+    uncertain_pred_count = 0;
 
     power_reset_idle_timer();
 }
@@ -366,12 +368,31 @@ static void classify_gesture() {
     //  3) During low confidence / transition noise, fall back to idle (---)
     bool candidate_is_sign = (strcmp(label, "---") != 0) && (raw_conf >= EI_SIGN_ENTER_CONF);
 
+    // "---" can mean either explicit non-sign class OR uncertainty gate from EI.
+    // If this repeats while a sign is latched, clear it so UI can return to idle.
+    bool reject_or_uncertain = (strcmp(label, "---") == 0);
+    if (strcmp(stable_pred_label, "---") != 0 && reject_or_uncertain) {
+        if (uncertain_pred_count < 255) uncertain_pred_count++;
+    } else {
+        uncertain_pred_count = 0;
+    }
+
+    if (strcmp(stable_pred_label, "---") != 0 &&
+        uncertain_pred_count >= EI_UNCERTAIN_RELEASE_FRAMES) {
+        strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
+        stable_pred_conf = 0.0f;
+        strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
+        pending_pred_count = 0;
+        uncertain_pred_count = 0;
+    }
+
     // If currently in a sign and confidence collapses, release to idle quickly.
     if (strcmp(stable_pred_label, "---") != 0 && raw_conf < EI_SIGN_EXIT_CONF) {
         strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
         stable_pred_conf = 0.0f;
         strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
         pending_pred_count = 0;
+        uncertain_pred_count = 0;
     }
 
     if (strcmp(stable_pred_label, "---") == 0) {
@@ -387,6 +408,7 @@ static void classify_gesture() {
             if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
                 strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
                 stable_pred_conf = raw_conf;
+                uncertain_pred_count = 0;
             }
         } else {
             strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
@@ -414,6 +436,7 @@ static void classify_gesture() {
                 if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
                     strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
                     stable_pred_conf = raw_conf;
+                    uncertain_pred_count = 0;
                 }
             } else {
                 strncpy(pending_pred_label, "---", sizeof(pending_pred_label));

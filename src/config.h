@@ -155,6 +155,7 @@ struct SensorData {
 // to runner-up, treat result as uncertain and output no prediction ("---").
 #define EI_UNCERTAIN_MIN_CONF       0.90f   // minimum top-1 confidence
 #define EI_UNCERTAIN_MIN_MARGIN     0.12f   // minimum (top1 - top2) margin
+#define EI_UNCERTAIN_RELEASE_FRAMES 2       // consecutive uncertain/no-sign frames to release latched sign
 #define POWER_BTN_DEBOUNCE_MS       300
 #define AUTO_SLEEP_TIMEOUT_MS       60000   // 60 seconds
 #define MUX_SETTLE_US               100     // Microseconds
