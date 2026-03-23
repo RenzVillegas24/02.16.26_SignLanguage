@@ -48,4 +48,9 @@ export const lastAlgoStore = {
   flatSelectedIds: [],
   flatSelectedCh: null,
   flatAutoDisable: false,
+
+  // Pattern Match — Ensemble engine
+  patternSensitivity: 0.6,  // 0–1, higher = detect more occurrences
+  patternTemplateLen: 0,    // 0 = auto (median of ref lengths)
+  patternMinGap: 0.5,       // minimum gap between segments as fraction of template length
 };

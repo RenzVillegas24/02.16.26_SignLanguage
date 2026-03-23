@@ -224,11 +224,11 @@ function playAudio(label){
   if(!base||base==='---')return;
   const tries=[base];
   if(base!==base.toLowerCase())tries.push(base.toLowerCase());
-  stopAudio();setAS('','&#8987; '+base);
+  stopAudio();setAS('','\u23F3 '+base);
   let idx=0;
   function next(){
     if(idx>=tries.length){
-      setAS('err','&#9888; No MP3: '+base+' (TTS)');
+      setAS('err','\u26A0 No MP3: '+base+' (TTS)');
       if(window.speechSynthesis){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(base);u.rate=0.9;speechSynthesis.speak(u);}
       return;
     }
@@ -237,8 +237,8 @@ function playAudio(label){
       if(!r.ok){idx++;next();return;}
       const a=new Audio(url);
       a.onerror=()=>{idx++;next();};
-      a.onended=()=>{curAudio=null;setAS('','&#9208; Idle');};
-      a.play().then(()=>{curAudio=a;setAS('ok','&#128266; '+tries[idx]);}).catch(()=>{idx++;next();});
+      a.onended=()=>{curAudio=null;setAS('','\u23F8 Idle');};
+      a.play().then(()=>{curAudio=a;setAS('ok','\uD83D\uDD0A '+tries[idx]);}).catch(()=>{idx++;next();});
     }).catch(()=>{idx++;next();});
   }
   next();
@@ -318,59 +318,52 @@ function connect(){
 ══════════════════════════════════════════════════════════════════ */
 
 let renderer,scene,camera,hGroup;
-let fingerPivots=[];   /* [fi][pi] pivot Groups */
-let camDrag=false,camPrev={x:0,y:0},camTh=0.25,camPh=0.88,camDist=4.2,camAuto=true;
+let fingerPivots=[];
+let camDrag=false,camPrev={x:0,y:0},camTh=0.0,camPh=0.72,camDist=3.8,camAuto=true;
 
-function hmat(col,r,m){return new THREE.MeshStandardMaterial({color:col,roughness:r||0.45,metalness:m||0.25});}
+function hmat(col,r,m){return new THREE.MeshStandardMaterial({color:col,roughness:r==null?0.55:r,metalness:m==null?0.08:m});}
 
-/*  buildFinger
-    Returns root Group and fills fingerPivots[fi].
-    knuckleX, knuckleZ  : attach point on palm top surface (y=0 here, palm adds offset)
-    lens   : phalange lengths   e.g. [0.38, 0.24, 0.18]
-    radii  : n+1 radii          e.g. [0.075, 0.065, 0.056, 0.048]
-    angleX : rest tilt in X (whole finger root, for natural spread)
-    angleZ : rest splay in Z
-*/
-function buildFinger(fi,kx,kz,lens,radii,color,angleX,angleZ){
+/* COORDINATE SYSTEM inside hGroup:
+   Palm face = +Y. Fingers grow in -Z. Wrist at +Z. Thumb toward -X.
+   buildFinger pre-rotates root by -PI/2 on X so CylinderGeometry (Y-axis)
+   grows in -Z. Curl = pivot.rotation.x positive = finger closes toward palm. */
+
+function makeBone(len,r0,r1,color){
+  const g=new THREE.CylinderGeometry(r1!=null?r1:r0*0.82,r0,len,10,1);
+  return new THREE.Mesh(g,hmat(color,0.50,0.08));
+}
+function makeJoint(r,color){
+  return new THREE.Mesh(new THREE.SphereGeometry(r,10,8),hmat(color,0.42,0.10));
+}
+
+function buildFinger(fi,lens,radii,color){
   const root=new THREE.Group();
-  root.position.set(kx,0,kz);
-  if(angleX)root.rotation.x=angleX;
-  if(angleZ)root.rotation.z=angleZ;
+  root.rotation.x=-Math.PI/2; /* grow in -Z */
 
   const pivots=[];
   let parent=root;
-  let offset=0; /* Y offset from parent where next pivot sits */
 
   for(let pi=0;pi<lens.length;pi++){
     const len=lens[pi];
-    const r0=radii[pi], r1=radii[pi+1]||r0*0.82;
+    const r0=radii[pi]||0.05;
+    const r1=radii[pi+1]!=null?radii[pi+1]:r0*0.84;
 
     const pivot=new THREE.Group();
-    pivot.position.y=offset;
+    pivot.position.y=(pi===0)?0:lens[pi-1]; /* tip of previous bone */
     parent.add(pivot);
     pivots.push(pivot);
 
-    /* knuckle sphere at every joint except the base (palm provides that) */
-    if(pi>0){
-      const ks=new THREE.Mesh(new THREE.SphereGeometry(r0*1.1,10,7),hmat(color,0.35,0.4));
-      pivot.add(ks);
-    }
-
-    /* tapered bone cylinder */
-    const bone=new THREE.Mesh(
-      new THREE.CylinderGeometry(r1,r0,len,12,1),
-      hmat(color,0.42,0.28));
+    pivot.add(makeJoint(r0*1.06,color));     /* knuckle */
+    const bone=makeBone(len,r0,r1,color);
     bone.position.y=len/2;
     pivot.add(bone);
 
-    offset=len;   /* next pivot attaches at tip of this bone */
     parent=pivot;
   }
-
-  /* fingertip sphere */
-  const tipR=radii[radii.length-1]*0.95;
-  const tip=new THREE.Mesh(new THREE.SphereGeometry(tipR,10,7),hmat(color,0.28,0.45));
-  tip.position.y=offset;
+  /* fingertip */
+  const tipR=(radii[lens.length]||radii[radii.length-1])*0.90;
+  const tip=makeJoint(tipR,color);
+  tip.position.y=lens[lens.length-1];
   parent.add(tip);
 
   fingerPivots[fi]=pivots;
@@ -384,93 +377,65 @@ function initHand(){
   renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,alpha:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setSize(W,H);
-  renderer.setClearColor(0,0);
+  renderer.setClearColor(0x080d1a,1);
 
   scene=new THREE.Scene();
   camera=new THREE.PerspectiveCamera(40,W/H,0.1,60);
 
-  scene.add(new THREE.AmbientLight(0xffffff,0.42));
-  const sun=new THREE.DirectionalLight(0xddeeff,1.1);sun.position.set(3,6,4);scene.add(sun);
-  const fill=new THREE.DirectionalLight(0x7dd3fc,0.55);fill.position.set(-5,2,-3);scene.add(fill);
-  const rim=new THREE.DirectionalLight(0xc084fc,0.32);rim.position.set(0,-4,2);scene.add(rim);
+  scene.add(new THREE.AmbientLight(0xfff4e8,0.55));
+  const sun=new THREE.DirectionalLight(0xffd5a0,1.30);sun.position.set(2,5,3);scene.add(sun);
+  const fill=new THREE.DirectionalLight(0xa0c8ff,0.55);fill.position.set(-4,1,-2);scene.add(fill);
+  const rim=new THREE.DirectionalLight(0xffffff,0.30);rim.position.set(0,0,5);scene.add(rim);
 
   hGroup=new THREE.Group();
-  hGroup.rotation.x=-Math.PI*0.35; /* rest pose: palm tilted toward camera */
   scene.add(hGroup);
 
-  /* PALM — 95x20x95mm scaled 1:18
-     Origin at palm centre. Knuckles at z=-PD/2, wrist at z=+PD/2.     */
-  const PW=1.05,PH=0.20,PD=1.05;
-  const palmMesh=new THREE.Mesh(new THREE.BoxGeometry(PW,PH,PD),hmat(0x1c2a42,0.55,0.18));
-  hGroup.add(palmMesh);
+  const SKIN=0xc8815a,SKIN2=0xb06840;
+  const PW=1.00,PH=0.18,PD=0.95;
 
-  /* dorsal ridge */
-  const ridge=new THREE.Mesh(new THREE.BoxGeometry(PW*0.6,PH*0.2,PD*0.65),hmat(0x253654,0.58,0.14));
-  ridge.position.set(0,PH*0.58,-0.05);
-  hGroup.add(ridge);
+  /* PALM box — fingers at -Z face, wrist at +Z face */
+  hGroup.add(new THREE.Mesh(new THREE.BoxGeometry(PW,PH,PD),hmat(SKIN,0.62,0.06)));
 
-  /* wrist cylinder */
-  const wrist=new THREE.Mesh(new THREE.CylinderGeometry(0.27,0.31,0.30,14,1),hmat(0x1c2a42,0.55,0.18));
-  wrist.position.set(0,0,PD*0.5+0.13);
-  hGroup.add(wrist);
+  /* Wrist cylinder at +Z */
+  const wr=new THREE.Mesh(new THREE.CylinderGeometry(0.25,0.28,0.28,12),hmat(SKIN,0.58,0.06));
+  wr.position.set(0,0,PD/2+0.14);
+  hGroup.add(wr);
 
-  /* knuckle spheres on palm edge */
-  const kxs=[-0.315,-0.095,0.12,0.33];
-  const krs=[0.078,0.082,0.075,0.060];
-  kxs.forEach((kx,i)=>{
-    const ks=new THREE.Mesh(new THREE.SphereGeometry(krs[i],10,7),hmat(FC[i+1],0.35,0.42));
-    ks.position.set(kx,PH*0.5,-PD*0.5);
-    hGroup.add(ks);
+  /* Knuckle bumps at -Z edge, top of palm */
+  [-0.30,-0.10,0.10,0.28].forEach((kx,i)=>{
+    const k=makeJoint([0.072,0.078,0.070,0.056][i],SKIN2);
+    k.position.set(kx,PH/2,-PD/2);
+    hGroup.add(k);
   });
 
-  /* finger roots sit on top of palm (y=+PH/2), so shift all buildFinger roots up */
-  const Y0=PH/2;
+  const Y0=PH/2; /* top surface of palm */
 
-  /* helper: attach finger root shifted up by Y0 */
-  function addFinger(fi,kx,kz,lens,radii,color,ax,az){
-    const root=buildFinger(fi,kx,kz,lens,radii,color,ax,az);
-    root.position.y=Y0; /* lift to palm surface */
-    hGroup.add(root);
+  /* 4 fingers: index(1) middle(2) ring(3) pinky(4) */
+  /* [fi, x, splayY, lens, radii] */
+  [
+    [1,-0.300, 0.04,[0.38,0.24,0.18],[0.072,0.062,0.053,0.045]],
+    [2,-0.095, 0.00,[0.42,0.27,0.20],[0.077,0.066,0.057,0.048]],
+    [3, 0.110,-0.04,[0.38,0.24,0.18],[0.070,0.060,0.051,0.043]],
+    [4, 0.285,-0.10,[0.27,0.18,0.13],[0.055,0.047,0.040,0.033]],
+  ].forEach(([fi,fx,splay,lens,radii])=>{
+    const r=buildFinger(fi,lens,radii,FC[fi]);
+    r.position.set(fx,Y0,-PD/2);
+    r.rotation.y=splay;
+    hGroup.add(r);
+  });
+
+  /* THUMB — radial side, angled forward-lateral */
+  {
+    const r=buildFinger(0,[0.28,0.22],[0.080,0.068,0.057],FC[0]);
+    r.position.set(-PW/2-0.02,0,0.15);
+    r.rotation.y= Math.PI*0.30;
+    r.rotation.z=-0.30;
+    hGroup.add(r);
   }
-
-  /* THUMB — lateral side, 2 joints (MCP flexion + IP flexion) */
-  addFinger(0,
-    -(PW*0.5), 0.10,
-    [0.26, 0.22],
-    [0.082,0.072,0.060],
-    FC[0], -0.18, 0.52);
-
-  /* INDEX */
-  addFinger(1,
-    -0.315, -PD*0.5,
-    [0.38,0.24,0.18],
-    [0.075,0.065,0.056,0.048],
-    FC[1], -0.04, 0.04);
-
-  /* MIDDLE */
-  addFinger(2,
-    -0.095, -(PD*0.5+0.01),
-    [0.42,0.26,0.20],
-    [0.080,0.069,0.059,0.050],
-    FC[2], 0, 0);
-
-  /* RING */
-  addFinger(3,
-    0.12, -PD*0.5,
-    [0.38,0.24,0.17],
-    [0.073,0.063,0.054,0.046],
-    FC[3], -0.03,-0.04);
-
-  /* PINKY */
-  addFinger(4,
-    0.33, -(PD*0.5-0.04),
-    [0.28,0.18,0.14],
-    [0.058,0.050,0.043,0.036],
-    FC[4], -0.06,-0.10);
 
   /* floor grid */
   const grid=new THREE.GridHelper(5,14,0x1a2540,0x1a2540);
-  grid.position.y=-1.5;grid.material.opacity=0.26;grid.material.transparent=true;
+  grid.position.y=-1.2;grid.material.opacity=0.28;grid.material.transparent=true;
   scene.add(grid);
 
   /* orbit controls */
@@ -499,7 +464,6 @@ function initHand(){
 
   renderLoop();
 }
-
 /* max curl angles per phalange [fi][pi] in radians */
 const MAXCURL=[
   [0.85,0.70],          /* Thumb: MCP, IP */
@@ -509,13 +473,15 @@ const MAXCURL=[
   [1.30,1.15,0.90],     /* Pinky */
 ];
 
+function lerp(a,b,t){return a+(b-a)*t;}
+
 function updateHand(){
   /* finger curl from flex sensor percentages */
   fingerPivots.forEach((pivots,fi)=>{
     if(!pivots)return;
     const curl=clamp(fPct[fi]/100,0,1);
     pivots.forEach((piv,pi)=>{
-      piv.rotation.x=THREE.MathUtils.lerp(piv.rotation.x,curl*(MAXCURL[fi][pi]||1.0),0.10);
+      piv.rotation.x=lerp(piv.rotation.x,curl*(MAXCURL[fi][pi]||1.0),0.10);
     });
   });
 
@@ -527,9 +493,9 @@ function updateHand(){
   const tX=clamp(imuPitch,-90,90)*D2R*0.9+BASE;
   const tZ=clamp(imuRoll, -90,90)*D2R*0.9;
   const tY=clamp(imuYaw, -180,180)*D2R*0.5;
-  hGroup.rotation.x=THREE.MathUtils.lerp(hGroup.rotation.x,tX,0.08);
-  hGroup.rotation.z=THREE.MathUtils.lerp(hGroup.rotation.z,tZ,0.08);
-  hGroup.rotation.y=THREE.MathUtils.lerp(hGroup.rotation.y,tY,0.05);
+  hGroup.rotation.x=lerp(hGroup.rotation.x,tX,0.08);
+  hGroup.rotation.z=lerp(hGroup.rotation.z,tZ,0.08);
+  hGroup.rotation.y=lerp(hGroup.rotation.y,tY,0.05);
 }
 
 function renderLoop(){
@@ -538,7 +504,7 @@ function renderLoop(){
   camera.position.x=camDist*Math.sin(camPh)*Math.sin(camTh);
   camera.position.y=camDist*Math.cos(camPh);
   camera.position.z=camDist*Math.sin(camPh)*Math.cos(camTh);
-  camera.lookAt(0,0,0);
+  camera.lookAt(0,0.1,-0.2);
   if(hand3D&&hGroup)updateHand();
   renderer.render(scene,camera);
 }

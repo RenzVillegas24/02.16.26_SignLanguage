@@ -585,62 +585,56 @@ export default function App() {
     const toExport = selectedSamples.filter(s => !s.fromLabels && s.values.length > 0 && getSampleType(s) !== 'trimmed');
     if (!toExport.length) { showToast('No exportable samples selected', 'error'); return; }
 
-    const zip = new JSZip();
-    const usedPaths = new Set();
-    const normalize = (name) => {
-      const base = String(name || 'sample.json').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
-      return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
-    };
-
-    const manifestFiles = toExport.map((s, i) => {
-      const category = s.category === 'testing' ? 'testing' : 'training';
-      const baseName = normalize(s.filename || `${s.label || 'sample'}_${s.id || i + 1}.json`);
-      let finalName = baseName;
-      let k = 2;
-      while (usedPaths.has(`${category}/${finalName}`)) {
-        finalName = baseName.replace(/\.json$/i, `_${k}.json`);
-        k++;
-      }
-      const relPath = `${category}/${finalName}`;
-      usedPaths.add(relPath);
-
-      zip.file(relPath, JSON.stringify(buildEIJson(s), null, 2));
-
-      return {
-        path: relPath,
-        category,
-        name: s.sampleName || finalName.replace(/\.json$/i, ''),
-        label: s.label,
-        enabled: s.enabled !== false,
-        length: s.values.length,
+    setLoading({ label: 'Building EI export ZIP', sub: `${toExport.length} samples` });
+    try {
+      const zip = new JSZip();
+      const usedPaths = new Set();
+      const normalize = name => {
+        const base = String(name || 'sample.json').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
+        return base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
       };
-    });
+      const makeEIFilename = (s, idx) => {
+        const labelPart = (s.label || 'unknown').replace(/\s+/g, '_').toLowerCase();
+        const namePart  = s.sampleName ? `.${s.sampleName.replace(/\s+/g, '_')}` : `_${idx + 1}`;
+        return `${labelPart}${namePart}.json`;
+      };
 
-    const labelsObj = {
-      version: 1,
-      files: manifestFiles.map(f => ({
-        path: f.path,
-        name: f.name,
-        category: f.category,
-        label: { type: 'label', label: f.label },
-        enabled: f.enabled,
-        length: f.length,
-      })),
-    };
+      const manifestFiles = toExport.map((s, i) => {
+        const category = s.category === 'testing' ? 'testing' : 'training';
+        const baseName = normalize(makeEIFilename(s, i));
+        let finalName = baseName, k = 2;
+        while (usedPaths.has(`${category}/${finalName}`)) {
+          finalName = baseName.replace(/\.json$/i, `_${k++}.json`);
+        }
+        const relPath = `${category}/${finalName}`;
+        usedPaths.add(relPath);
+        zip.file(relPath, JSON.stringify(buildEIJson(s), null, 2));
+        return { path: relPath, category, name: s.sampleName || finalName.replace(/\.json$/i, ''), label: s.label, enabled: s.enabled !== false, length: s.values.length };
+      });
 
-    zip.file('info.labels', JSON.stringify(labelsObj, null, 2));
+      zip.file('info.labels', JSON.stringify({
+        version: 1,
+        files: manifestFiles.map(f => ({
+          path: f.path, name: f.name, category: f.category,
+          label: { type: 'label', label: f.label },
+          enabled: f.enabled, length: f.length, metadata: {},
+        })),
+      }, null, 2));
 
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const url = URL.createObjectURL(blob);
-    const a = Object.assign(document.createElement('a'), {
-      href: url,
-      download: `ei_export_${stamp}.zip`,
-    });
-    a.click();
-    URL.revokeObjectURL(url);
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const url1 = URL.createObjectURL(blob);
+      const a1 = Object.assign(document.createElement('a'), { href: url1, download: `ei_export_${stamp}.zip` });
+      document.body.appendChild(a1); a1.click(); document.body.removeChild(a1);
+      setTimeout(() => URL.revokeObjectURL(url1), 1000);
 
-    showToast(`Exported ZIP with ${toExport.length} sample${toExport.length !== 1 ? 's' : ''} + info.labels`, 'success');
+      const train = manifestFiles.filter(f => f.category === 'training').length;
+      const test  = manifestFiles.filter(f => f.category === 'testing').length;
+      showToast(`Exported ${toExport.length} samples (${train} train / ${test} test) + info.labels`, 'success');
+    } catch (err) {
+      showToast(`Export failed: ${err.message}`, 'error');
+    }
+    setLoading(null);
   };
 
   const exportSplitSamplesZip = async () => {
@@ -718,11 +712,9 @@ export default function App() {
       const blob = await zip.generateAsync({ type: 'blob' });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const url = URL.createObjectURL(blob);
-      Object.assign(document.createElement('a'), {
-        href: url,
-        download: `ei_export_${stamp}.zip`,
-      }).click();
-      URL.revokeObjectURL(url);
+      const a2 = Object.assign(document.createElement('a'), { href: url, download: `ei_export_${stamp}.zip` });
+      document.body.appendChild(a2); a2.click(); document.body.removeChild(a2);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
 
       const train = manifestFiles.filter(f => f.category === 'training').length;
       const test  = manifestFiles.filter(f => f.category === 'testing').length;
@@ -766,8 +758,9 @@ export default function App() {
       const blob = await zip.generateAsync({ type: 'blob' });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const url = URL.createObjectURL(blob);
-      Object.assign(document.createElement('a'), { href: url, download: `ei_studio_project_${stamp}.eisproj.zip` }).click();
-      URL.revokeObjectURL(url);
+      const a3 = Object.assign(document.createElement('a'), { href: url, download: `ei_studio_project_${stamp}.eisproj.zip` });
+      document.body.appendChild(a3); a3.click(); document.body.removeChild(a3);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
       showToast(`Project saved (${samples.length} samples)`, 'success');
     } catch (err) {
       showToast(`Save project failed: ${err.message}`, 'error');
@@ -1283,14 +1276,14 @@ export default function App() {
             </select>
             <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
               {['all', 'training', 'testing'].map(v => (
-                <button key={v} onClick={() => setFilterCategory(v)} style={{ flex: 1, background: filterCategory === v ? (v === 'testing' ? '#451a0333' : v === 'training' ? '#0d204066' : '#1e293b') : '#080f1e', border: `1px solid ${filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#64748b') : theme.border}`, color: filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#94a3b8') : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <button key={v} onClick={() => setFilterCategory(v)} style={{ flex: 1, background: filterCategory === v ? (v === 'testing' ? '#451a0333' : v === 'training' ? '#0d204066' : '#1e293b') : theme.bgPanel, border: `1px solid ${filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : '#64748b') : theme.border}`, color: filterCategory === v ? (v === 'testing' ? CATEGORY_COLORS.testing : v === 'training' ? CATEGORY_COLORS.training : theme.textSecondary) : theme.textDim, borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
                   {v === 'all' ? 'All' : v === 'training' ? 'Train' : 'Test'}
                 </button>
               ))}
             </div>
             <div style={{ display: 'flex', gap: 3, marginBottom: 5 }}>
               {['all', 'enabled', 'disabled'].map(v => (
-                <button key={v} onClick={() => setFilterStatus(v)} style={{ flex: 1, background: filterStatus === v ? '#0d2040' : '#080f1e', border: `1px solid ${filterStatus === v ? '#2563eb' : theme.border}`, color: filterStatus === v ? '#60a5fa' : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
+                <button key={v} onClick={() => setFilterStatus(v)} style={{ flex: 1, background: filterStatus === v ? '#0d2040' : theme.bgPanel, border: `1px solid ${filterStatus === v ? '#2563eb' : theme.border}`, color: filterStatus === v ? '#60a5fa' : '#334155', borderRadius: 4, padding: '3px 0', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
               ))}
             </div>
             <div style={{ fontSize: 9, color: theme.textDim, marginBottom: 3 }}>View Samples</div>
@@ -1308,7 +1301,7 @@ export default function App() {
                     style={{
                       flex: 1,
                       minWidth: 75,
-                      background: on ? '#0d2040' : '#080f1e',
+                      background: on ? theme.bgActive : theme.bgPanel,
                       border: `1px solid ${on ? '#3b82f6' : theme.border}`,
                       color: on ? '#60a5fa' : '#334155',
                       borderRadius: 4,
@@ -1466,11 +1459,11 @@ export default function App() {
               </span>
               <div style={{ display: 'flex', gap: 2 }}>
                 <button onClick={() => setSidebarViewMode('list')} title="List view"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'list' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'list' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'list' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'list' ? theme.border : 'transparent', border: `1px solid ${sidebarViewMode === 'list' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'list' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
                   <List size={12} />
                 </button>
                 <button onClick={() => setSidebarViewMode('grid')} title="Grid view"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'grid' ? '#1e293b' : 'transparent', border: `1px solid ${sidebarViewMode === 'grid' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'grid' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, background: sidebarViewMode === 'grid' ? theme.border : 'transparent', border: `1px solid ${sidebarViewMode === 'grid' ? '#3b82f6' : theme.border}`, color: sidebarViewMode === 'grid' ? '#60a5fa' : '#334155', borderRadius: 4, cursor: 'pointer' }}>
                   <LayoutGrid size={12} />
                 </button>
               </div>
@@ -1480,7 +1473,7 @@ export default function App() {
           {/* Sample list / grid */}
           <div style={{ flex: 1, overflowY: 'auto', padding: sidebarViewMode === 'grid' ? '0 6px 10px' : '0 8px 10px' }}>
             {filteredSamples.length === 0 && (
-              <div style={{ color: '#1e293b', fontSize: 10, textAlign: 'center', paddingTop: 24, lineHeight: 1.9 }}>
+              <div style={{ color: theme.textFaint, fontSize: 10, textAlign: 'center', paddingTop: 24, lineHeight: 1.9 }}>
                 {samples.length ? 'No samples match filters' : <>Drop a <b style={{ color: '#34d399' }}>.zip</b> file<br />(info.labels + testing/ + training/)</>}
               </div>
             )}
@@ -1502,7 +1495,7 @@ export default function App() {
             style={{ position: 'absolute', top: 0, right: -3, width: 6, height: '100%', cursor: 'col-resize', zIndex: 10, background: 'transparent' }}
             title="Drag to resize sidebar"
           >
-            <div style={{ position: 'absolute', top: '50%', right: 1, transform: 'translateY(-50%)', width: 3, height: 40, background: '#1e293b', borderRadius: 2, transition: 'background 0.15s' }}
+            <div style={{ position: 'absolute', top: '50%', right: 1, transform: 'translateY(-50%)', width: 3, height: 40, background: theme.border, borderRadius: 2, transition: 'background 0.15s' }}
               onMouseEnter={e => e.currentTarget.style.background = '#3b82f6'}
               onMouseLeave={e => e.currentTarget.style.background = theme.border} />
           </div>
@@ -1516,7 +1509,7 @@ export default function App() {
             ))}
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: 16, background: theme.bgBase }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
 
             {/* ── WAVEFORM ── */}
             {tab === 'waveform' && (
@@ -1607,7 +1600,7 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {!viewSamples.length && <div style={{ color: '#1e293b', textAlign: 'center', padding: 60, fontSize: 13 }}>← Click a sample to view its waveform</div>}
+                {!viewSamples.length && <div style={{ color: theme.textFaint, textAlign: 'center', padding: 60, fontSize: 13 }}>← Click a sample to view its waveform</div>}
               </div>
             )}
 
@@ -1623,7 +1616,7 @@ export default function App() {
                     <div key={label} style={{ background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
                       <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${theme.border}`, flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 700, fontSize: 13, color: theme.textPrimary, flex: 1 }}>{label}</span>
-                        <span style={{ background: '#0d2040', color: '#60a5fa', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{group.length} files</span>
+                        <span style={{ background: theme.bgActive, color: theme.accent, fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{group.length} files</span>
                         <span style={{ background: '#052e16', color: '#34d399', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{totalPts} pts</span>
                         <span style={{ background: '#1a1a40', color: '#a78bfa', fontSize: 9, borderRadius: 3, padding: '2px 6px' }}>{formatMs(totalMs)}</span>
                         <span style={{ color: CATEGORY_COLORS.training, fontSize: 9 }}>{tr}tr</span>
@@ -1634,7 +1627,7 @@ export default function App() {
                       <div style={{ padding: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                         {group.map(s => (
                           <div key={s.id} onClick={() => { setActiveId(s.id); setTab('waveform'); }}
-                            style={{ background: s.id === activeId ? theme.bgActive : theme.bgCard, borderTop: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderRight: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderBottom: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? '#1e293b' : '#450a0a'}`, borderLeft: `2px solid ${s.category === 'testing' ? CATEGORY_COLORS.testing + '88' : CATEGORY_COLORS.training + '88'}`, borderRadius: 5, padding: '5px 9px', cursor: 'pointer', fontSize: 9 }}>
+                            style={{ background: s.id === activeId ? theme.bgActive : theme.bgCard, borderTop: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? theme.border : '#450a0a'}`, borderRight: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? theme.border : '#450a0a'}`, borderBottom: `1px solid ${s.id === activeId ? '#38bdf8' : s.enabled ? theme.border : '#450a0a'}`, borderLeft: `2px solid ${s.category === 'testing' ? CATEGORY_COLORS.testing + '88' : CATEGORY_COLORS.training + '88'}`, borderRadius: 5, padding: '5px 9px', cursor: 'pointer', fontSize: 9 }}>
                             <div style={{ color: theme.textMuted }}>{s.values.length || '—'}pt</div>
                             <div style={{ color: theme.textDim }}>{formatMs(s.duration_ms)}</div>
                             <div style={{ color: s.category === 'testing' ? CATEGORY_COLORS.testing : CATEGORY_COLORS.training, fontSize: 8 }}>{s.category === 'testing' ? 'TEST' : 'TRAIN'}</div>
@@ -1644,7 +1637,7 @@ export default function App() {
                     </div>
                   );
                 })}
-                {!Object.keys(groupedByLabel).length && <div style={{ color: '#1e293b', textAlign: 'center', padding: 60 }}>Import a ZIP to see groups</div>}
+                {!Object.keys(groupedByLabel).length && <div style={{ color: theme.textFaint, textAlign: 'center', padding: 60 }}>Import a ZIP to see groups</div>}
               </div>
             )}
 

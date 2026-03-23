@@ -1,5 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
 import { LayoutDashboard, Layers, GitGraph } from 'lucide-react';
+import { useTheme } from '../utils/ThemeContext';
 import { SENSOR_COLORS } from '../utils/colors';
 
 // ─── Sensor group definitions ─────────────────────────────────────────────
@@ -68,12 +69,13 @@ function ChannelStrip({ allValues, sensor, colIdx, color, height = 56, sampleBou
 
 // ─── Group panel ──────────────────────────────────────────────────────────
 function GroupPanel({ groupKey, groupDef, sensors, allValues, vis, onToggle, sampleBoundaries, totalPts, showAll, onShowAllToggle }) {
+  const theme = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const groupSensors = useMemo(() => sensors.filter(s => getSensorGroup(s) === groupKey), [sensors, groupKey]);
   if (groupSensors.length === 0) return null;
   const shownSensors = showAll ? groupSensors : groupSensors.filter(s => vis.has(s));
   return (
-    <div style={{ background: '#080f1e', border: '1px solid #1e293b', borderRadius: 8, marginBottom: 6, overflow: 'hidden' }}>
+    <div style={{ background: theme.bgPanel, border: `1px solid ${theme.border}`, borderRadius: 8, marginBottom: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: '#0a1628', cursor: 'pointer' }}
         onClick={() => setCollapsed(c => !c)}>
         <span style={{ color: groupDef.color, fontSize: 10, fontWeight: 700, minWidth: 42 }}>{groupDef.label}</span>
@@ -262,6 +264,7 @@ function OverlayNormCanvas({ allValues, sensors, vis, sampleBoundaries, totalPts
 
 // ─── Shared channel/group toggles row ─────────────────────────────────────
 function ChannelToggles({ sensors, vis, onToggle, onToggleGroup, showGroupState }) {
+  const theme = useTheme();
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: 8 }}>
       {Object.entries(SENSOR_GROUPS).map(([key, def]) => {
@@ -271,8 +274,8 @@ function ChannelToggles({ sensors, vis, onToggle, onToggleGroup, showGroupState 
         const someOn = gs.some(s => vis.has(s));
         return (
           <button key={key} onClick={() => onToggleGroup(key)} style={{
-            background: allOn ? def.color + '33' : someOn ? def.color + '16' : '#080f1e',
-            border: `2px solid ${allOn ? def.color : someOn ? def.color + '77' : '#1e293b'}`,
+            background: allOn ? def.color + '33' : someOn ? def.color + '16' : theme.bgPanel,
+            border: `2px solid ${allOn ? def.color : someOn ? def.color + '77' : theme.border}`,
             color: allOn || someOn ? def.color : '#475569',
             borderRadius: 4, padding: '2px 9px', fontSize: 9, cursor: 'pointer',
             fontFamily: 'monospace', fontWeight: 700,
@@ -281,11 +284,11 @@ function ChannelToggles({ sensors, vis, onToggle, onToggleGroup, showGroupState 
           </button>
         );
       })}
-      <span style={{ borderLeft: '1px solid #1e293b', margin: '0 2px' }} />
+      <span style={{ borderLeft: `1px solid ${theme.border}`, margin: '0 2px' }} />
       {sensors.map((s, i) => (
         <button key={s} onClick={() => onToggle(s)} style={{
-          background: vis.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '22' : '#080f1e',
-          border: `1px solid ${vis.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
+          background: vis.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '22' : theme.bgPanel,
+          border: `1px solid ${vis.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] : theme.border}`,
           color: vis.has(s) ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#334155',
           borderRadius: 3, padding: '1px 5px', fontSize: 9, cursor: 'pointer', fontFamily: 'monospace',
         }}>{s}</button>
@@ -320,6 +323,7 @@ const DISPLAY_MODES = [
 ];
 
 export default function WaveformViewer({ samples, sensors }) {
+  const theme = useTheme();
   const [vis, setVis]                  = useState(() => new Set(sensors.slice(0, 8)));
   const [displayMode, setDisplayMode]  = useState('combined');
   const [showAllGroups, setShowAllGroups] = useState(new Set());
@@ -354,9 +358,9 @@ export default function WaveformViewer({ samples, sensors }) {
           {DISPLAY_MODES.map(m => (
             <button key={m.key} onClick={() => setDisplayMode(m.key)} style={{
               display: 'flex', alignItems: 'center', gap: 5,
-              background: displayMode === m.key ? '#0d2040' : '#080f1e',
-              border: `1px solid ${displayMode === m.key ? '#3b82f6' : '#1e293b'}`,
-              color: displayMode === m.key ? '#60a5fa' : '#475569',
+              background: displayMode === m.key ? '#0d2040' : theme.bgPanel,
+              border: `1px solid ${displayMode === m.key ? '#3b82f6' : theme.border}`,
+              color: displayMode === m.key ? '#60a5fa' : theme.textMuted,
               borderRadius: 5, padding: '4px 10px', fontSize: 10, cursor: 'pointer', fontFamily: 'monospace',
             }}>
               {m.icon}

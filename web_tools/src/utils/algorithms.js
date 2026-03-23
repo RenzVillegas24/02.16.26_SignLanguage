@@ -195,3 +195,246 @@ export function batchAutoSplit(samples, sensors, cfg) {
     return { sample, parts, cuts };
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Pattern-Aware Intelligent Split ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Algorithm:
+// 1. Build a "template" from reference samples of the same label:
+//    - Normalize each reference to zero-mean unit-variance
+//    - Align them to peak activity, then average → canonical template
+// 2. Slide the template over the target sample using normalized cross-correlation
+// 3. Pick peaks in the correlation curve → each peak = one gesture occurrence
+// 4. Estimate segment boundaries as peak ± half template length
+// 5. Merge overlapping segments, filter by min/max duration
+// 6. Return cut points with confidence scores
+//
+// Jitter is applied to each cut at execution time (in doSplit) based on the
+// Random Shift settings, so this function returns clean cuts.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a 1-D array to zero mean, unit variance.
+ */
+function znorm(arr) {
+  const n = arr.length;
+  if (!n) return arr;
+  const mean = arr.reduce((a, b) => a + b, 0) / n;
+  const std  = Math.sqrt(arr.reduce((a, b) => a + (b - mean) ** 2, 0) / n) || 1;
+  return arr.map(v => (v - mean) / std);
+}
+
+/**
+ * Compute a composite "activity signal" from values+sensors:
+ * RMS across all selected channel derivatives (rate-of-change emphasises gesture transitions).
+ */
+function activitySignal(values, sensors, channelIdxs) {
+  if (!channelIdxs.length || !values.length) return new Array(values.length).fill(0);
+  const cols = channelIdxs.map(ci => getCol(values, ci).map((v, i, a) => i > 0 ? Math.abs(v - a[i - 1]) : 0));
+  return values.map((_, t) => {
+    let sum = 0;
+    for (const col of cols) sum += col[t] ** 2;
+    return Math.sqrt(sum / cols.length);
+  });
+}
+
+/**
+ * Build a template signal from multiple reference samples.
+ * Steps:
+ *   a. Compute activity signal per sample
+ *   b. Find the global activity peak in each sample
+ *   c. Trim each to [peak - halfLen, peak + halfLen]
+ *   d. Average the trimmed, z-normed signals → template
+ *
+ * @param {number[][][]} refValues  - array of values arrays
+ * @param {string[]}     sensors
+ * @param {number[]}     chIdxs
+ * @param {number}       templateLen  - desired template length (pts)
+ * @returns {number[]} template signal of length templateLen
+ */
+function buildTemplate(refValues, sensors, chIdxs, templateLen) {
+  const half = Math.floor(templateLen / 2);
+  const aligned = [];
+
+  for (const vals of refValues) {
+    if (vals.length < templateLen) continue;
+    const act = activitySignal(vals, sensors, chIdxs);
+    // Find peak
+    let peakIdx = 0, peakVal = -Infinity;
+    for (let i = half; i < act.length - half; i++) {
+      if (act[i] > peakVal) { peakVal = act[i]; peakIdx = i; }
+    }
+    const start = Math.max(0, peakIdx - half);
+    const end   = Math.min(vals.length, start + templateLen);
+    const slice = act.slice(start, end);
+    if (slice.length === templateLen) aligned.push(znorm(slice));
+  }
+
+  if (!aligned.length) return new Array(templateLen).fill(0);
+
+  // Average
+  const tmpl = new Array(templateLen).fill(0);
+  for (const a of aligned) for (let i = 0; i < templateLen; i++) tmpl[i] += a[i];
+  return tmpl.map(v => v / aligned.length);
+}
+
+/**
+ * Normalized cross-correlation between template T and signal S at every lag.
+ * Returns correlation array (same length as S, padded with zeros at edges).
+ */
+function ncc(signal, template) {
+  const N = signal.length;
+  const M = template.length;
+  const tMean = template.reduce((a, b) => a + b, 0) / M;
+  const tStd  = Math.sqrt(template.reduce((a, b) => a + (b - tMean) ** 2, 0) / M) || 1;
+  const tNorm = template.map(v => v - tMean);
+  const corr  = new Array(N).fill(0);
+
+  for (let lag = 0; lag <= N - M; lag++) {
+    const window = signal.slice(lag, lag + M);
+    const wMean  = window.reduce((a, b) => a + b, 0) / M;
+    const wStd   = Math.sqrt(window.reduce((a, b) => a + (b - wMean) ** 2, 0) / M) || 1;
+    let dot = 0;
+    for (let i = 0; i < M; i++) dot += tNorm[i] * (window[i] - wMean);
+    corr[lag + Math.floor(M / 2)] = dot / (M * tStd * wStd);
+  }
+  return corr;
+}
+
+/**
+ * Simple non-maximum suppression peak picker.
+ * Returns indices of local maxima above threshold with minimum spacing.
+ */
+function pickPeaks(signal, threshold, minSpacing) {
+  const peaks = [];
+  for (let i = 1; i < signal.length - 1; i++) {
+    if (signal[i] < threshold) continue;
+    if (signal[i] <= signal[i - 1] || signal[i] <= signal[i + 1]) continue;
+    if (peaks.length && i - peaks[peaks.length - 1].idx < minSpacing) {
+      // Keep higher peak
+      if (signal[i] > peaks[peaks.length - 1].score) {
+        peaks[peaks.length - 1] = { idx: i, score: signal[i] };
+      }
+    } else {
+      peaks.push({ idx: i, score: signal[i] });
+    }
+  }
+  return peaks;
+}
+
+/**
+ * Main pattern-aware split function.
+ *
+ * @param {number[][]}   targetValues   - the sample to split
+ * @param {string[]}     sensors
+ * @param {number[][][]} refValues      - reference samples (same label, ideally clean individual gestures)
+ * @param {object}       cfg
+ *   templateLen   : length of template in pts (default: median of ref lengths)
+ *   threshold     : NCC threshold to count as a match (0–1, default 0.35)
+ *   minGapFrac    : min gap between segments as fraction of templateLen (default 0.3)
+ *   chIdxs        : channel indices to use (default: all)
+ *   maxSegments   : max number of segments to return
+ * @returns { cuts, peaks, corr, templateLen, confidence }
+ */
+export function patternSplit(targetValues, sensors, refValues, cfg = {}) {
+  const N = targetValues.length;
+  if (!N || !refValues.length) return { cuts: [], peaks: [], corr: [], templateLen: 0, confidence: 0 };
+
+  // Determine template length from median reference length
+  const refLens = refValues.map(r => r.length).sort((a, b) => a - b);
+  const medianLen = refLens[Math.floor(refLens.length / 2)];
+  const templateLen = cfg.templateLen || Math.max(10, Math.min(medianLen, Math.floor(N / 2)));
+
+  // Choose channels
+  const allChIdxs = sensors.map((_, i) => i);
+  const chIdxs = cfg.chIdxs?.length ? cfg.chIdxs : pickBestChannels(targetValues, sensors, 4).map(n => sensors.indexOf(n));
+
+  // Build template
+  const template = buildTemplate(refValues, sensors, chIdxs, templateLen);
+
+  // Compute target activity signal
+  const targetAct = znorm(activitySignal(targetValues, sensors, chIdxs));
+
+  // NCC
+  const corr = ncc(targetAct, template);
+
+  // Smooth the correlation
+  const smoothCorr = movAvg(corr, Math.floor(templateLen * 0.1));
+
+  // Dynamic threshold: if cfg.threshold is given, use it; else use mean + 0.5*std
+  const corrStats = colStats(smoothCorr);
+  const autoThresh = corrStats.mean + (corrStats.std * 0.7);
+  const threshold  = cfg.threshold ?? Math.max(0.15, Math.min(0.6, autoThresh));
+
+  // Min spacing between peaks = fraction of template length
+  const minSpacing = Math.round(templateLen * (cfg.minGapFrac ?? 0.5));
+
+  // Pick peaks
+  const peaks = pickPeaks(smoothCorr, threshold, minSpacing);
+
+  // Convert peaks to cut points (between consecutive peaks)
+  // Cut point = midpoint between consecutive peak centers
+  const cuts = [];
+  const half = Math.floor(templateLen / 2);
+  
+  if (peaks.length < 2) {
+    // Only one pattern found — try to split into 2 around the peak
+    if (peaks.length === 1) {
+      const p = peaks[0];
+      const segStart = Math.max(0, p.idx - half);
+      const segEnd   = Math.min(N, p.idx + half);
+      if (segStart > 10) cuts.push(segStart);
+      if (segEnd < N - 10) cuts.push(segEnd);
+    }
+  } else {
+    // Between each consecutive pair of peaks, place a cut at the correlation valley
+    for (let i = 0; i < peaks.length - 1; i++) {
+      const a = peaks[i].idx;
+      const b = peaks[i + 1].idx;
+      // Find the valley (minimum correlation) between these two peaks
+      let valleyIdx = a + 1, valleyVal = smoothCorr[a + 1] ?? Infinity;
+      for (let j = a + 1; j < b; j++) {
+        if ((smoothCorr[j] ?? 0) < valleyVal) {
+          valleyVal = smoothCorr[j];
+          valleyIdx = j;
+        }
+      }
+      cuts.push(Math.max(1, Math.min(N - 1, valleyIdx)));
+    }
+
+    // Leading cut before first peak if there's meaningful space
+    const firstSeg = peaks[0].idx - half;
+    if (firstSeg > Math.floor(templateLen * 0.3)) cuts.unshift(Math.max(1, firstSeg));
+
+    // Trailing cut after last peak
+    const lastSeg = peaks[peaks.length - 1].idx + half;
+    if (lastSeg < N - Math.floor(templateLen * 0.3)) cuts.push(Math.min(N - 1, lastSeg));
+  }
+
+  const uniqueCuts = [...new Set(cuts)].sort((a, b) => a - b).filter(c => c > 0 && c < N);
+  const confidence = peaks.length ? peaks.reduce((a, p) => a + p.score, 0) / peaks.length : 0;
+
+  return {
+    cuts: uniqueCuts,
+    peaks,
+    corr: smoothCorr,
+    templateLen,
+    confidence: Math.min(1, Math.max(0, confidence)),
+    threshold,
+  };
+}
+
+/**
+ * Batch pattern split — applies patternSplit to multiple targets.
+ * Uses ALL reference samples (excluding the target itself).
+ */
+export function batchPatternSplit(targets, sensors, allSamples, cfg = {}) {
+  return targets.map(target => {
+    const refs = allSamples
+      .filter(s => s.label === target.label && s.id !== target.id && s.values?.length > 0)
+      .map(s => s.values);
+    const result = patternSplit(target.values, sensors, refs, cfg);
+    return { sample: target, ...result };
+  });
+}

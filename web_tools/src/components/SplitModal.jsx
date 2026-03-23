@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Scissors, RefreshCw, X, Shuffle, Trash2 } from 'lucide-react';
+import { Scissors, RefreshCw, X, Shuffle, Trash2, Cpu } from 'lucide-react';
 import { runAutoDetect, pickBestChannels, batchAutoSplit } from '../utils/algorithms';
+import { advancedPatternSplit, advancedBatchPatternSplit } from '../utils/patternEngine';
 import { SENSOR_COLORS } from '../utils/colors';
 import { formatMs } from '../utils/parse';
 import WaveformCutter from './WaveformCutter';
@@ -10,6 +11,363 @@ import { lastAlgoStore } from '../utils/lastAlgo';
 import { runFlatDetector } from '../utils/flatDetector';
 import { groupSensorsByDiscriminant } from '../utils/flatDetector';
 import { getSensorGroup } from './WaveformViewer';
+
+// ─── Multi-method correlation canvas ─────────────────────────────────────
+function CorrCanvas({ result, interval_ms, height = 90 }) {
+  const ref = useRef();
+  const { corr = [], nccMap = [], dtwMap = [], featMap = [], envelope = [], peaks = [], threshold = 0, templateLen = 0 } = result || {};
+  const N = corr.length;
+
+  useEffect(() => {
+    const c = ref.current; if (!c) return;
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+    ctx.fillStyle = '#06101e'; ctx.fillRect(0, 0, W, H);
+    if (!N) return;
+
+    const maxV = Math.max(...corr, 0.01);
+
+    // Background heat from composite
+    for (let x = 0; x < W; x++) {
+      const idx = Math.floor((x / W) * N);
+      const v = Math.max(0, Math.min(1, (corr[idx] || 0) / maxV));
+      const r = Math.round(v * v * 180);
+      const g = Math.round(v * 130);
+      const b = Math.round(v < 0.5 ? 180 : 180 * (1 - (v - 0.5) * 2));
+      ctx.fillStyle = `rgba(${r},${g},${b},0.3)`;
+      ctx.fillRect(x, 0, 1, H - 16);
+    }
+
+    const drawLine = (map, color, lw = 1) => {
+      if (!map.length) return;
+      const mx = Math.max(...map, 0.01);
+      ctx.strokeStyle = color; ctx.lineWidth = lw;
+      ctx.beginPath();
+      map.forEach((v, i) => {
+        const x = (i / Math.max(N - 1, 1)) * W;
+        const y = (H - 16) * (1 - Math.max(0, v) / mx);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    };
+
+    // Draw individual method lines (subtle)
+    drawLine(nccMap, '#38bdf899', 1.2);
+    drawLine(dtwMap, '#34d39988', 1.0);
+    drawLine(featMap, '#a78bfa88', 1.0);
+
+    // Draw composite (bright)
+    drawLine(corr, '#f1f5f9cc', 2);
+
+    // Envelope overlay (very subtle)
+    if (envelope.length) {
+      const emx = Math.max(...envelope, 0.01);
+      ctx.fillStyle = '#f59e0b11';
+      ctx.beginPath();
+      envelope.forEach((v, i) => {
+        const x = (i / Math.max(N - 1, 1)) * W;
+        const y = (H - 16) * (1 - Math.max(0, v) / emx);
+        i === 0 ? ctx.moveTo(x, H - 16) || ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.lineTo(W, H - 16); ctx.closePath(); ctx.fill();
+    }
+
+    // Threshold line
+    if (maxV > 0) {
+      const ty = (H - 16) * (1 - threshold / maxV);
+      ctx.strokeStyle = '#f59e0b99'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(W, ty); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Peak markers
+    peaks.forEach((p, i) => {
+      const x = (p.idx / Math.max(N - 1, 1)) * W;
+      ctx.strokeStyle = '#34d399cc'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - 16); ctx.stroke();
+      // Score badge
+      const lbl = `${(p.score * 100).toFixed(0)}%`;
+      ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
+      const tw = ctx.measureText(lbl).width + 6;
+      ctx.fillStyle = '#052e16dd';
+      ctx.fillRect(x - tw / 2, 2, tw, 12);
+      ctx.fillStyle = '#34d399'; ctx.fillText(lbl, x, 11);
+    });
+
+    // Template length indicator
+    if (templateLen && N) {
+      const tW = (templateLen / N) * W;
+      ctx.strokeStyle = '#a78bfa44'; ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
+      ctx.strokeRect(3, 1, tW, H - 18); ctx.setLineDash([]);
+      ctx.fillStyle = '#a78bfa99'; ctx.font = '7px monospace'; ctx.textAlign = 'left';
+      ctx.fillText(`tmpl:${(templateLen * interval_ms / 1000).toFixed(2)}s`, 5, 9);
+    }
+
+    // Time axis
+    ctx.fillStyle = '#334155'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+    const totalMs = N * interval_ms;
+    for (let t = 0; t <= 6; t++) ctx.fillText(`${((t / 6) * totalMs / 1000).toFixed(1)}s`, (t / 6) * W, H - 2);
+
+    // Legend
+    const legend = [['#38bdf8', 'NCC'], ['#34d399', 'DTW'], ['#a78bfa', 'Feat'], ['#f1f5f9', 'Fused']];
+    let lx = W - 4;
+    for (const [col, lbl] of legend.reverse()) {
+      ctx.font = '7px monospace'; ctx.textAlign = 'right';
+      ctx.fillStyle = col; ctx.fillText(lbl, lx, 9);
+      lx -= ctx.measureText(lbl).width + 12;
+    }
+  }, [corr, nccMap, dtwMap, featMap, envelope, peaks, threshold, templateLen, interval_ms, N, height]);
+
+  return <canvas ref={ref} width={880} height={height} style={{ width: '100%', height, display: 'block', borderRadius: 6 }} />;
+}
+
+// ─── Pattern split panel ──────────────────────────────────────────────────
+function PatternPanel({ targetSample, allSamples, sensors, onCutsFound }) {
+  const { values, interval_ms, label } = targetSample;
+  const N = values.length;
+
+  const refSamples = useMemo(() =>
+    allSamples.filter(s => s.label === label && s.id !== targetSample.id && s.values?.length > 0),
+    [allSamples, label, targetSample.id]
+  );
+
+  const [sensitivity,  setSensitivity]  = useState(lastAlgoStore.patternSensitivity ?? 0.6);
+  const [templateLen,  setTemplateLen]  = useState(lastAlgoStore.patternTemplateLen ?? 0);
+  const [minGapFrac,   setMinGapFrac]   = useState(lastAlgoStore.patternMinGap ?? 0.5);
+  const [selectedCh,   setSelectedCh]   = useState(() => new Set(pickBestChannels(values, sensors, 4)));
+  const [result,       setResult]       = useState(null);
+  const [running,      setRunning]      = useState(false);
+  const [progress,     setProgress]     = useState('');
+  const workerRef = useRef(null);
+
+  useEffect(() => {
+    lastAlgoStore.patternSensitivity = sensitivity;
+    lastAlgoStore.patternTemplateLen = templateLen;
+    lastAlgoStore.patternMinGap      = minGapFrac;
+  }, [sensitivity, templateLen, minGapFrac]);
+
+  const avgRefLen = refSamples.length
+    ? Math.round(refSamples.reduce((a, s) => a + s.values.length, 0) / refSamples.length)
+    : 0;
+
+  const run = useCallback(() => {
+    if (!refSamples.length) return;
+    setRunning(true);
+    setProgress('Building channel templates…');
+
+    // Run in chunked async steps to keep UI responsive and show progress
+    const chIdxs = [...selectedCh].map(ch => sensors.indexOf(ch)).filter(i => i >= 0);
+    const refs    = refSamples.map(s => s.values);
+    const cfg     = {
+      chIdxs, sensitivity, minGapFrac,
+      templateLen: templateLen > 10 ? templateLen : 0,
+      interval_ms,
+    };
+
+    // Step through async to show loading stages
+    const steps = [
+      () => { setProgress(`Self-calibrating on ${refs.length} references (LOO)…`); },
+      () => { setProgress(`Multi-scale NCC · ${chIdxs.length} channels × 3 scales…`); },
+      () => { setProgress(`DTW distance scan · stride=${Math.max(1,Math.floor((templateLen||50)*0.1))}pts…`); },
+      () => { setProgress('Rich feature similarity scan…'); },
+      () => { setProgress('Fusing ensemble · applying calibrated threshold…'); },
+    ];
+
+    let stepIdx = 0;
+    const tick = () => {
+      if (stepIdx < steps.length) {
+        steps[stepIdx++]();
+        setTimeout(tick, 0);
+      } else {
+        const res = advancedPatternSplit(values, sensors, refs, cfg);
+        setResult(res);
+        onCutsFound(res.cuts);
+        setRunning(false);
+        setProgress('');
+      }
+    };
+    setTimeout(tick, 0);
+  }, [refSamples, values, sensors, selectedCh, sensitivity, templateLen, minGapFrac, onCutsFound]);
+
+  useEffect(() => {
+    if (refSamples.length > 0) run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const SI = { background: '#060d1a', color: '#f1f5f9', border: '1px solid #1e293b', borderRadius: 5, padding: '4px 8px', fontSize: 11, boxSizing: 'border-box', fontFamily: 'inherit' };
+
+  return (
+    <div>
+      {/* Reference summary */}
+      <div style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Cpu size={13} /> Ensemble Pattern Engine
+          <span style={{ fontWeight: 400, color: '#64748b', fontSize: 9 }}>NCC · DTW · Energy · Features</span>
+        </div>
+        {refSamples.length === 0 ? (
+          <div style={{ color: '#f87171', fontSize: 10, padding: '6px 0' }}>
+            No other <b>"{label}"</b> samples found. Import more samples of this label to use pattern detection.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 14, fontSize: 10, color: '#64748b', flexWrap: 'wrap' }}>
+            <span><b style={{ color: '#34d399' }}>{refSamples.length}</b> reference samples</span>
+            <span>avg ref: <b style={{ color: '#60a5fa' }}>{formatMs(avgRefLen * interval_ms)}</b></span>
+            <span>target: <b style={{ color: '#a78bfa' }}>{formatMs(N * interval_ms)}</b></span>
+            {result && <span>occurrences: <b style={{ color: '#fbbf24' }}>{result.peaks.length}</b></span>}
+            {result && <span>confidence: <b style={{ color: result.confidence > 0.6 ? '#34d399' : result.confidence > 0.35 ? '#fbbf24' : '#f87171' }}>{(result.confidence * 100).toFixed(0)}%</b></span>}
+            {result?.diagnostics && <span style={{ color: '#334155', fontSize: 8 }}>{result.diagnostics}</span>}
+          </div>
+        )}
+        {refSamples.length > 0 && (
+          <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+            {refSamples.slice(0, 10).map(s => (
+              <span key={s.id} style={{ background: '#0a1628', border: '1px solid #1e293b', color: '#475569', fontSize: 8, borderRadius: 4, padding: '1px 6px', fontFamily: 'monospace' }}>
+                {s.sampleName || s.filename?.replace(/\.json$/i, '') || 'sample'} · {formatMs(s.duration_ms)}
+              </span>
+            ))}
+            {refSamples.length > 10 && <span style={{ color: '#334155', fontSize: 8 }}>+{refSamples.length - 10}</span>}
+          </div>
+        )}
+      </div>
+
+      {/* Channel selector */}
+      <div style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b' }}>Feature Channels</span>
+          <button onClick={() => setSelectedCh(new Set(sensors))}
+            style={{ background: 'none', border: '1px solid #1e293b', color: '#475569', borderRadius: 3, padding: '1px 6px', fontSize: 8, cursor: 'pointer', fontFamily: 'inherit' }}>all</button>
+          <button onClick={() => setSelectedCh(new Set(pickBestChannels(values, sensors, 4)))}
+            style={{ background: 'none', border: '1px solid #1e293b', color: '#475569', borderRadius: 3, padding: '1px 6px', fontSize: 8, cursor: 'pointer', fontFamily: 'inherit' }}>auto best 4</button>
+          <span style={{ fontSize: 8, color: '#334155' }}>{selectedCh.size}/{sensors.length} selected</span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {sensors.map((s, i) => {
+            const on = selectedCh.has(s);
+            return (
+              <button key={s} onClick={() => setSelectedCh(p => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; })} style={{
+                background: on ? SENSOR_COLORS[i % SENSOR_COLORS.length] + '22' : '#050c1a',
+                border: `1px solid ${on ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#1e293b'}`,
+                color: on ? SENSOR_COLORS[i % SENSOR_COLORS.length] : '#334155',
+                borderRadius: 3, padding: '2px 6px', fontSize: 9, cursor: 'pointer',
+                fontFamily: 'monospace', fontWeight: on ? 700 : 400,
+              }}>{s}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Parameters */}
+      <div style={{ background: '#050c1a', border: '1px solid #1e293b', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3 }}>
+              Sensitivity <b style={{ color: '#94a3b8' }}>{(sensitivity * 100).toFixed(0)}%</b>
+              <span style={{ color: '#334155', marginLeft: 4, fontSize: 9 }}>— higher finds more (may add noise)</span>
+            </div>
+            <input type="range" min={20} max={90} value={Math.round(sensitivity * 100)}
+              onChange={e => setSensitivity(Number(e.target.value) / 100)}
+              style={{ width: '100%', accentColor: '#a78bfa' }} />
+          </div>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3 }}>
+              Min gap <b style={{ color: '#94a3b8' }}>{(minGapFrac * 100).toFixed(0)}%</b>
+              <span style={{ color: '#334155', marginLeft: 4, fontSize: 9 }}>of template length</span>
+            </div>
+            <input type="range" min={10} max={90} value={Math.round(minGapFrac * 100)}
+              onChange={e => setMinGapFrac(Number(e.target.value) / 100)}
+              style={{ width: '100%', accentColor: '#a78bfa' }} />
+          </div>
+          <div style={{ minWidth: 120 }}>
+            <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3 }}>
+              Template length <b style={{ color: '#94a3b8' }}>{templateLen > 10 ? `${templateLen}pts · ${formatMs(templateLen * interval_ms)}` : 'auto'}</b>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input type="number" min={0} value={templateLen}
+                onChange={e => setTemplateLen(Math.max(0, Number(e.target.value)))}
+                placeholder="0=auto" style={{ ...SI, width: 80 }} />
+              {avgRefLen > 0 && (
+                <button onClick={() => setTemplateLen(avgRefLen)}
+                  style={{ background: 'none', border: '1px solid #1e293b', color: '#475569', borderRadius: 4, padding: '2px 6px', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  ~{formatMs(avgRefLen * interval_ms)}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={run} disabled={refSamples.length === 0 || running} style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: refSamples.length > 0 && !running ? '#1a0d3a' : '#1e293b',
+            border: `1px solid ${refSamples.length > 0 && !running ? '#7c3aed' : '#1e293b'}`,
+            color: refSamples.length > 0 && !running ? '#a78bfa' : '#334155',
+            borderRadius: 6, padding: '7px 16px', cursor: refSamples.length > 0 && !running ? 'pointer' : 'not-allowed',
+            fontSize: 11, fontWeight: 700, fontFamily: 'inherit',
+          }}>
+            <Cpu size={13} style={{ animation: running ? 'spin 1s linear infinite' : 'none' }} />
+            {running ? (progress || 'Running…') : 'Run Ensemble Detector'}
+          </button>
+          {result && !running && (
+            <span style={{ fontSize: 9, color: '#64748b' }}>
+              {result.cuts.length} cuts → {result.cuts.length + 1} segments · {result.peaks.length} peaks detected
+            </span>
+          )}
+          {refSamples.length === 0 && <span style={{ fontSize: 9, color: '#f87171' }}>Import more "{label}" samples first</span>}
+        </div>
+
+        {/* Loading progress bar */}
+        {running && (
+          <div style={{ marginTop: 10, background: '#0a1628', borderRadius: 6, overflow: 'hidden', height: 4 }}>
+            <div style={{ height: '100%', background: 'linear-gradient(90deg, #7c3aed, #a78bfa)', borderRadius: 6, animation: 'progressPulse 1.5s ease-in-out infinite', width: '60%' }} />
+          </div>
+        )}
+      </div>
+
+      {/* Ensemble visualization */}
+      {result && (result.fused?.length > 0) && (
+        <div style={{ background: '#050c1a', border: '1px solid #1a0d3a', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', marginBottom: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            Ensemble Score
+            <span style={{ fontWeight: 400, fontSize: 8, color: '#334155', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: '#38bdf8' }}>━ NCC</span>
+              <span style={{ color: '#34d399' }}>━ DTW</span>
+              <span style={{ color: '#a78bfa' }}>━ Features</span>
+              <span style={{ color: '#f1f5f9' }}>━━ Fused</span>
+              <span style={{ color: '#f59e0b' }}>- - threshold</span>
+              <span style={{ color: '#34d399' }}>| peaks</span>
+            </span>
+          </div>
+          <CorrCanvas
+            result={{
+              corr: result.fused,
+              nccMap: result.nccScores,
+              dtwMap: result.dtwScores,
+              featMap: result.featScores,
+              envelope: result.energyScores,
+              peaks: result.peaks,
+              threshold: result.threshold,
+              templateLen: result.templateLen,
+            }}
+            interval_ms={interval_ms}
+            height={100}
+          />
+          {result.peaks.length === 0 ? (
+            <div style={{ marginTop: 6, fontSize: 9, color: '#f59e0b' }}>
+              No occurrences detected. Try raising sensitivity or reducing min gap.
+            </div>
+          ) : (
+            <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {result.peaks.map((p, i) => (
+                <span key={i} style={{ background: '#052e1644', border: '1px solid #166534', color: '#34d399', fontSize: 9, borderRadius: 3, padding: '1px 7px', fontFamily: 'monospace' }}>
+                  #{i + 1} @{(p.idx * interval_ms / 1000).toFixed(2)}s · {(p.score * 100).toFixed(0)}%
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Batch preview ─────────────────────────────────────────────────────────
 function BatchGraphs({ samples, batchStates, sensors, visSensors: initialVisSensors, padInfo,
@@ -318,6 +676,9 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
       shiftEnabled: enableShift, shiftLo, shiftHi, shiftUnit,
       padEnabled: enablePad, padLo, padHi, padUnit, padRandom,
       durEnabled: enableDur, durLo, durHi, durUnit, durAlign,
+      patternSensitivity: lastAlgoStore.patternSensitivity,
+      patternTemplateLen: lastAlgoStore.patternTemplateLen,
+      patternMinGap: lastAlgoStore.patternMinGap,
       flatAutoDisable: autoDisableFlat,
     });
   }, [mode, algo, windowSize, windowIncreaseStride, threshold, stdMult, sensitivity, minGap, numParts,
@@ -415,19 +776,30 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           const removed = autoDisableFlat ? getFlatRemovedSegs(cuts, res.flatRegions || [], smpl.values.length) : new Set();
           states[smpl.id] = { cuts, removedSegs: removed };
         });
-        setBatchStates(states);
       } else {
-        const bRes = batchAutoSplit(batchSamples, sensors, getCfg());
-        const states = {};
-        bRes.forEach(r => {
-          let sampleCuts = r.cuts;
-          if (mode === 'equal') {
+        if (mode === 'pattern') {
+          // Advanced pattern batch split
+          const results = advancedBatchPatternSplit(batchSamples, sensors, allSamples, {
+            sensitivity: lastAlgoStore.patternSensitivity ?? 0.6,
+            templateLen: lastAlgoStore.patternTemplateLen > 10 ? lastAlgoStore.patternTemplateLen : undefined,
+            minGapFrac: lastAlgoStore.patternMinGap,
+          });
+          const states = {};
+          results.forEach(r => { states[r.sample.id] = { cuts: r.cuts, removedSegs: new Set() }; });
+          setBatchStates(states);
+        } else {
+          const bRes = batchAutoSplit(batchSamples, sensors, getCfg());
+          const states = {};
+          bRes.forEach(r => {
+            let sampleCuts = r.cuts;
+            if (mode === 'equal') {
               const sz = Math.floor(r.sample.values.length / equalParts);
               sampleCuts = Array.from({ length: equalParts - 1 }, (_, i) => (i + 1) * sz);
-          }
-          states[r.sample.id] = { cuts: sampleCuts, removedSegs: new Set() };
-        });
-        setBatchStates(states);
+            }
+            states[r.sample.id] = { cuts: sampleCuts, removedSegs: new Set() };
+          });
+          setBatchStates(states);
+        }
       }
     } else {
       if (mode === 'auto') {
@@ -437,6 +809,8 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         const sz = Math.floor(N / equalParts);
         setCuts(Array.from({ length: equalParts - 1 }, (_, i) => (i + 1) * sz));
         setRemovedSegs(new Set());
+      } else if (mode === 'pattern') {
+        // Pattern split is handled inside PatternPanel via onCutsFound callback
       }
     }
   }, [mode, getCfg, values, sensors, N, equalParts, isBatch, batchSamples, allSamples, autoDisableFlat, getFlatRemovedSegs]);
@@ -714,11 +1088,11 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
         <div style={{ padding: 16 }}>
           {/* Mode tabs */}
           <div style={{ display: 'flex', gap: 3, background: '#050c1a', borderRadius: 8, padding: 4, marginBottom: 14 }}>
-            {[['auto', 'Auto-Detect'], ['equal', 'Equal Parts'], ['manual', 'Manual'], ['flat', 'Predicted Flat']].map(([m, lbl]) => (
+            {[['auto', 'Auto-Detect'], ['equal', 'Equal Parts'], ['manual', 'Manual'], ['flat', 'Predicted Flat'], ['pattern', 'Pattern Match']].map(([m, lbl]) => (
               <button key={m} onClick={() => setMode(m)} style={{
-                flex: 1, background: mode === m ? (m === 'flat' ? '#0a2a0a' : '#0d2040') : 'none',
-                border: `1px solid ${mode === m ? (m === 'flat' ? '#34d399' : '#3b82f6') : 'transparent'}`,
-                color: mode === m ? (m === 'flat' ? '#34d399' : '#60a5fa') : '#475569',
+                flex: 1, background: mode === m ? (m === 'flat' ? '#0a2a0a' : m === 'pattern' ? '#1a0d3a' : '#0d2040') : 'none',
+                border: `1px solid ${mode === m ? (m === 'flat' ? '#34d399' : m === 'pattern' ? '#a78bfa' : '#3b82f6') : 'transparent'}`,
+                color: mode === m ? (m === 'flat' ? '#34d399' : m === 'pattern' ? '#a78bfa' : '#60a5fa') : '#475569',
                 borderRadius: 6, padding: '7px 0', cursor: 'pointer',
                 fontSize: 11, fontFamily: 'inherit', fontWeight: mode === m ? 700 : 400,
               }}>{lbl}</button>
@@ -803,6 +1177,30 @@ export default function SplitModal({ sample, samples, allSamples = [], onSplit, 
           {mode === 'manual' && !isBatch && (
             <div style={{ background: '#050c1a', border: '1px dashed #1e293b', borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 10, color: '#64748b' }}>
               Click waveform to add cuts · Drag handles to move · Dbl-click to remove
+            </div>
+          )}
+
+          {/* Pattern Match mode */}
+          {mode === 'pattern' && (
+            <div style={{ background: '#050c1a', border: '1px solid #1a0d3a55', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Cpu size={14} color="#a78bfa" />
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa' }}>Pattern Match</span>
+                <span style={{ fontSize: 9, color: '#475569' }}>
+                  — learns the gesture shape from other <b style={{ color: '#f1f5f9' }}>{label}</b> samples, then locates all occurrences
+                </span>
+              </div>
+              <PatternPanel
+                targetSample={primarySample}
+                allSamples={allSamples}
+                sensors={sensors}
+                onCutsFound={newCuts => {
+                  const normalized = [...newCuts].filter(c => c > 0 && c < N).sort((a, b) => a - b);
+                  setCuts(normalized);
+                  setRemovedSegs(new Set());
+                  if (isBatch) recalc();
+                }}
+              />
             </div>
           )}
 
