@@ -55,6 +55,7 @@ static char      stable_pred_label[32] = "---";
 static float     stable_pred_conf = 0.0f;
 static char      pending_pred_label[32] = "---";
 static uint8_t   pending_pred_count = 0;
+static uint32_t  pending_pred_since_ms = 0;
 static uint8_t   uncertain_pred_count = 0;
 static char      last_spoken_label[32] = "";  // track last spoken label to avoid repeat
 
@@ -160,6 +161,7 @@ static void on_mode_change(AppMode m) {
     strncpy(stable_pred_label, "---", sizeof(stable_pred_label));
     strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
     pending_pred_count = 0;
+    pending_pred_since_ms = 0;
     uncertain_pred_count = 0;
 
     power_reset_idle_timer();
@@ -357,6 +359,8 @@ static const uint32_t stream_interval_ms = TRAIN_SERIAL_INTERVAL_MS;
 static void classify_gesture() {
     if (!sensor_module_ei_ready()) return;
 
+    uint32_t now_ms = millis();
+
     const char *raw_label = sensor_module_predict(processed_data);
     float raw_conf = processed_data.prediction_confidence;
 
@@ -383,6 +387,7 @@ static void classify_gesture() {
         stable_pred_conf = 0.0f;
         strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
         pending_pred_count = 0;
+        pending_pred_since_ms = 0;
         uncertain_pred_count = 0;
     }
 
@@ -392,20 +397,24 @@ static void classify_gesture() {
         stable_pred_conf = 0.0f;
         strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
         pending_pred_count = 0;
+        pending_pred_since_ms = 0;
         uncertain_pred_count = 0;
     }
 
     if (strcmp(stable_pred_label, "---") == 0) {
-        // Idle → Sign requires confirmation frames
+        // Idle → Sign requires a 1000 ms confirmation window
         if (candidate_is_sign) {
             if (strcmp(label, pending_pred_label) == 0) {
                 if (pending_pred_count < 255) pending_pred_count++;
             } else {
                 strncpy(pending_pred_label, label, sizeof(pending_pred_label));
                 pending_pred_count = 1;
+                pending_pred_since_ms = now_ms;
             }
 
-            if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
+            if (pending_pred_since_ms == 0) pending_pred_since_ms = now_ms;
+
+            if ((now_ms - pending_pred_since_ms) >= EI_SIGN_CONFIRM_MS) {
                 strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
                 stable_pred_conf = raw_conf;
                 uncertain_pred_count = 0;
@@ -413,6 +422,7 @@ static void classify_gesture() {
         } else {
             strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
             pending_pred_count = 0;
+            pending_pred_since_ms = 0;
         }
     } else {
         // Already in a sign
@@ -421,8 +431,9 @@ static void classify_gesture() {
             stable_pred_conf = raw_conf;
             strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
             pending_pred_count = 0;
+            pending_pred_since_ms = 0;
         } else if (candidate_is_sign) {
-            // Sign → different sign requires both margin and confirmation
+            // Sign → different sign requires both margin and 1000 ms confirmation
             bool strong_switch = (raw_conf >= EI_SWITCH_HARD_CONF) ||
                                  (raw_conf >= (stable_pred_conf + EI_SWITCH_MARGIN));
             if (strong_switch) {
@@ -431,9 +442,12 @@ static void classify_gesture() {
                 } else {
                     strncpy(pending_pred_label, label, sizeof(pending_pred_label));
                     pending_pred_count = 1;
+                    pending_pred_since_ms = now_ms;
                 }
 
-                if (pending_pred_count >= EI_SIGN_CONFIRM_FRAMES) {
+                if (pending_pred_since_ms == 0) pending_pred_since_ms = now_ms;
+
+                if ((now_ms - pending_pred_since_ms) >= EI_SIGN_CONFIRM_MS) {
                     strncpy(stable_pred_label, pending_pred_label, sizeof(stable_pred_label));
                     stable_pred_conf = raw_conf;
                     uncertain_pred_count = 0;
@@ -441,24 +455,24 @@ static void classify_gesture() {
             } else {
                 strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
                 pending_pred_count = 0;
+                pending_pred_since_ms = 0;
             }
         } else {
             // Non-sign / weak confidence while in sign: do not jump to random sign.
             // Release already handled by EI_SIGN_EXIT_CONF above.
             strncpy(pending_pred_label, "---", sizeof(pending_pred_label));
             pending_pred_count = 0;
+            pending_pred_since_ms = 0;
         }
     }
 
-    if (strcmp(stable_pred_label, "---") == 0) {
+    // Live UI label: show prediction instantly with a lower confidence gate.
+    // Stable label (above) is still used for high-confidence commit/audio logic.
+    bool live_is_sign = (strcmp(label, "---") != 0) && (raw_conf >= EI_SIGN_EXIT_CONF);
+    if (!live_is_sign) {
         strncpy(gesture_text, "---", sizeof(gesture_text));
     } else {
-        // Only update the display text if audio is NOT playing — prevents
-        // the label from flickering to a new gesture mid-speech.
-        if (!audio_is_playing()) {
-            strncpy(gesture_text, stable_pred_label, sizeof(gesture_text));
-        }
-        // Still allow non-sign → idle transitions even during playback
+        strncpy(gesture_text, label, sizeof(gesture_text));
     }
 }
 
@@ -760,14 +774,14 @@ void loop() {
         }
         // Play audio when a gesture is detected (only when label changes)
         if (gui_local_use_speech() && !audio_is_playing() && !lock_active) {
-            if (strcmp(gesture_text, "---") != 0 &&
-                strcmp(gesture_text, "ERROR") != 0 &&
-                !sensor_module_is_nonsign_label(gesture_text) &&   // never speak null classes
-                strcmp(gesture_text, last_spoken_label) != 0) {
+            if (strcmp(stable_pred_label, "---") != 0 &&
+                strcmp(stable_pred_label, "ERROR") != 0 &&
+                !sensor_module_is_nonsign_label(stable_pred_label) &&   // never speak null classes
+                strcmp(stable_pred_label, last_spoken_label) != 0) {
                 // Build the audio file path: /<voice>/<label>.mp3
                 char audio_path[64];
                 snprintf(audio_path, sizeof(audio_path), "/%s/%s.mp3",
-                         gui_local_voice_dir(), gesture_text);
+                         gui_local_voice_dir(), stable_pred_label);
 
                 // Only attempt playback if the file actually exists on LittleFS.
                 // This silently skips FSL labels not yet recorded as audio.
@@ -776,24 +790,27 @@ void loop() {
                     Serial.printf("[MAIN] Playing audio: %s\n", audio_path);
                 } else {
                     Serial.printf("[MAIN] No audio file for label '%s' (%s) — skipping\n",
-                                  gesture_text, audio_path);
+                                  stable_pred_label, audio_path);
                 }
                 // Lock the label either way to prevent repeat-spam
-                strncpy(last_spoken_label, gesture_text, sizeof(last_spoken_label));
+                strncpy(last_spoken_label, stable_pred_label, sizeof(last_spoken_label));
             }
             // Only reset the spoken-label guard once audio has finished and
             // the gesture has gone back to idle — avoids immediate re-trigger.
-            if (strcmp(gesture_text, "---") == 0 && !audio_is_playing()) {
+            if (strcmp(stable_pred_label, "---") == 0 && !audio_is_playing()) {
                 last_spoken_label[0] = '\0';
             }
         }
         break;
 
-    case MODE_PREDICT_WEB:
-        if (!lock_active) {
-            web_server_update(sensor_data, gesture_text);
-            gui_web_set_connected(web_server_num_clients() > 0);
-        }
+case MODE_PREDICT_WEB:
+    if (!lock_active) {
+        // WEB output uses stabilized prediction timing (same handover guard).
+        web_server_update(sensor_data, processed_data, stable_pred_label,
+                          stable_pred_conf);
+        gui_web_set_connected(web_server_num_clients() > 0);
+    }
+
         if (!lock_active && now - last_display >= DISPLAY_UPDATE_INTERVAL_MS) {
             last_display = now;
             gui_set_gesture(gesture_text);

@@ -150,6 +150,7 @@ struct SensorData {
 #define EI_SIGN_ENTER_CONF          0.90f   // minimum confidence to enter a sign from idle
 #define EI_SIGN_EXIT_CONF           0.52f   // drop back to idle if current sign falls below this
 #define EI_SIGN_CONFIRM_FRAMES      2       // consecutive frames required before accepting/switching sign
+#define EI_SIGN_CONFIRM_MS          250    // candidate sign must persist this long before commit
 
 // Uncertainty gate (Edge Impulse-like): if top class is weak or too close
 // to runner-up, treat result as uncertain and output no prediction ("---").

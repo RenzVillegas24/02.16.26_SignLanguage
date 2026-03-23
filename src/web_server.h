@@ -1,16 +1,29 @@
-/*
- * @file web_server.h
- * @brief WiFi AP + HTTP server for WEB predict mode
- */
 #pragma once
+#include "sensors.h"
+#include "sensor_module/sensor_module.h"
 
-#include <Arduino.h>
-#include "config.h"
+/**
+ * Start the WiFi Soft-AP and HTTP server.
+ * LittleFS is mounted inside this call and kept mounted until stop.
+ */
+void web_server_start();
+void web_server_stop();
 
-void web_server_start();                       // Start WiFi AP + HTTP server
-void web_server_stop();                        // Stop WiFi AP + server
-void web_server_update(const SensorData &d,    // Push data to connected clients
-                       const char *gesture);
-bool web_server_is_running();
-int  web_server_num_clients();                 // Number of stations connected to AP
-String web_server_get_url();                   // e.g. "http://192.168.4.1"
+/**
+ * Must be called every loop() iteration.
+ * @param d          Raw sensor data
+ * @param pd         Processed sensor data (calibrated percentages)
+ * @param gesture    Null-terminated gesture label (or "---")
+ * @param confidence Prediction confidence 0.0 – 1.0  (optional, default 0)
+ */
+void web_server_update(const SensorData &d, const ProcessedSensorData &pd,
+					   const char *gesture, float confidence);
+void web_server_update(const SensorData &d, const ProcessedSensorData &pd,
+					   const char *gesture);  // compat overload
+
+void web_server_update(const SensorData &d, const char *gesture, float confidence);
+void web_server_update(const SensorData &d, const char *gesture);  // compat overload
+
+bool   web_server_is_running();
+int    web_server_num_clients();
+String web_server_get_url();
